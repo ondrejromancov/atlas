@@ -76,7 +76,14 @@ node dashboard.mjs [path-to-repo]     # defaults to the current directory
 ```
 
 It edits the repo's `.atlas/config.json` (planner, default worker, overrides) and the pinned `model:`
-lines of the installed `~/.claude/agents/atlas-*.md` files. Zero dependencies, localhost only.
+lines of the installed `~/.claude/agents/atlas-*.md` files. Model dropdowns are populated live from
+`agy models` and `lms ls` where those CLIs can enumerate; curated lists elsewhere. Zero dependencies,
+localhost only.
+
+The **Traces** section mines the repo's Claude Code session transcripts for Atlas runs and shows, per
+run: a per-model activity timeline (when Fable, Codex, Claude, and the wrappers were busy), token and
+estimated-cost breakdown per model at current API rates, and how many tokens Codex handled at $0 —
+with a rate-range estimate of what that work would have cost on Fable 5.
 
 ## Config (`.atlas/config.json`)
 
