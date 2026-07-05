@@ -501,8 +501,12 @@ const PAGE = `<!doctype html>
   #status { font-size: 13px; color: var(--muted); }
   #status.err { color: var(--danger); }
   .agent { display: flex; gap: 10px; align-items: center; }
-  .agent .name { flex: 1.2; font-family: ui-monospace, monospace; font-size: 13px; }
-  .agent input { flex: 1; }
+  .agent .name { flex: 0 0 175px; font-family: ui-monospace, monospace; font-size: 13px; }
+  .agent .brain { flex: 1.2; font-size: 13px; color: var(--muted); }
+  .agent .brain b { color: var(--ink); font-weight: 600; }
+  .agent .wlabel { flex: none; font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .05em; }
+  .agent input { flex: 0 1 170px; }
   .missing { color: var(--danger); font-size: 13px; }
   .hint { text-transform: none; letter-spacing: 0; font-weight: normal; opacity: .8; }
   /* Trace viz — validated categorical slots (dataviz reference palette) */
@@ -559,9 +563,11 @@ const PAGE = `<!doctype html>
   <div id="overrides"></div>
   <button id="add-override">+ Add override</button>
 
-  <h2>Worker agents <span class="role">pinned models in ~/.claude/agents</span></h2>
-  <p class="sub">Claude Code fixes each subagent's model in its definition file — the wrapper model for
-  CLI workers (gpt/gemini), the implementing model for the claude worker.</p>
+  <h2>Worker agents <span class="role">who actually writes the code</span></h2>
+  <p class="sub">Three of the four workers are thin wrappers: a small Claude subagent whose only job is
+  to shell out to another CLI — the real work happens in that CLI's model (shown per row). The wrapper
+  model just forwards the ticket, so cheap (haiku) is correct. Only the claude worker implements
+  directly with its pinned model.</p>
   <div class="card" id="agents"></div>
 
   <h2>Traces <span class="role">per-run model activity, tokens &amp; est. cost</span></h2>
@@ -634,14 +640,34 @@ async function collectOverrides() {
   }));
 }
 
+function workerBrain(name) {
+  // What actually implements the ticket, resolved from the routing config.
+  const c = state.config;
+  if (name === 'atlas-gpt-worker')
+    return \`runs <b>\${esc(c.defaultWorker.model)}</b> via Codex CLI\`;
+  if (name === 'atlas-claude-worker')
+    return 'implements directly with the pinned model →';
+  if (name === 'atlas-gemini-worker') {
+    const o = c.overrides.find((x) => x.worker === 'gemini');
+    return \`runs <b>\${esc(o?.model ?? 'Gemini 3.1 Pro')}</b> via agy CLI\`;
+  }
+  if (name === 'atlas-local-worker') {
+    const o = c.overrides.find((x) => x.worker === 'local');
+    return \`runs <b>\${esc(o?.model ?? 'local model')}</b> via LM Studio\`;
+  }
+  return '';
+}
+
 function renderAgents(agents) {
   $('agents').innerHTML = agents.map((a) => a.exists ? \`
-    <div class="agent" data-name="\${a.name}" style="margin:6px 0">
+    <div class="agent" data-name="\${a.name}" style="margin:8px 0">
       <span class="name">\${a.name}</span>
+      <span class="brain">\${workerBrain(a.name)}</span>
+      <span class="wlabel">\${a.name === 'atlas-claude-worker' ? 'model' : 'wrapper'}</span>
       <input class="ag-model" list="dl-claude" value="\${esc(a.model ?? '')}">
       <button class="ag-save">Save</button>
     </div>\` : \`
-    <div class="agent" style="margin:6px 0">
+    <div class="agent" style="margin:8px 0">
       <span class="name">\${a.name}</span>
       <span class="missing">not installed (\${esc(a.file)})</span>
     </div>\`).join('');
