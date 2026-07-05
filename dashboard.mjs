@@ -11,6 +11,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 const repoRoot = path.resolve(process.argv[2] ?? process.cwd());
 const configPath = path.join(repoRoot, '.atlas', 'config.json');
@@ -64,6 +65,37 @@ function validateConfig(c) {
     if (typeof o?.model !== 'string' || !o.model.trim()) return `overrides[${i}].model must be a non-empty string`;
   }
   return null;
+}
+
+// Model/effort options. Live where the CLI can enumerate them (agy, lms);
+// curated fallbacks where it can't (codex has no model-list command, and
+// Claude Code model aliases aren't enumerable from a CLI).
+let optionsCache = { at: 0, value: null };
+function getOptions() {
+  if (optionsCache.value && Date.now() - optionsCache.at < 60_000) return optionsCache.value;
+  const run = (cmd, args) => {
+    try {
+      return execFileSync(cmd, args, { encoding: 'utf8', timeout: 15_000 });
+    } catch {
+      return '';
+    }
+  };
+  const agy = run('agy', ['models']).split('\n').map((s) => s.trim()).filter(Boolean);
+  let lmstudio = [];
+  try {
+    lmstudio = JSON.parse(run('lms', ['ls', '--json']) || '[]')
+      .filter((m) => m.type === 'llm')
+      .map((m) => m.modelKey)
+      .filter(Boolean);
+  } catch {}
+  const value = {
+    codex: { models: ['gpt-5.5'], efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'], live: false },
+    claude: { models: ['claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'opus', 'sonnet', 'haiku'], live: false },
+    gemini: { models: agy, live: agy.length > 0 },
+    local: { models: lmstudio, live: lmstudio.length > 0 },
+  };
+  optionsCache = { at: Date.now(), value };
+  return value;
 }
 
 function readAgents() {
@@ -151,6 +183,7 @@ const PAGE = `<!doctype html>
   .agent .name { flex: 1.2; font-family: ui-monospace, monospace; font-size: 13px; }
   .agent input { flex: 1; }
   .missing { color: var(--danger); font-size: 13px; }
+  .hint { text-transform: none; letter-spacing: 0; font-weight: normal; opacity: .8; }
 </style>
 </head>
 <body>
@@ -188,6 +221,7 @@ const PAGE = `<!doctype html>
     <button class="primary" id="save">Save config</button>
     <span id="status"></span>
   </div>
+  <div id="datalists"></div>
 </main>
 <script>
 const WORKER_TYPES = ${JSON.stringify(WORKER_TYPES)};
@@ -201,6 +235,12 @@ function setStatus(msg, isErr) {
   $('status').className = isErr ? 'err' : '';
 }
 
+function modelHint(type) {
+  const o = state?.options?.[type];
+  if (!o) return '';
+  return o.live ? \`live from \${type === 'local' ? 'lms ls' : 'agy models'}\` : 'curated — CLI has no list command';
+}
+
 function renderOverrides(overrides) {
   $('overrides').innerHTML = overrides.map((o, i) => \`
     <div class="card" data-i="\${i}">
@@ -210,7 +250,8 @@ function renderOverrides(overrides) {
         <div><label>Worker</label>
           <select class="ov-worker">\${WORKER_TYPES.map((t) =>
             \`<option \${t === o.worker ? 'selected' : ''}>\${t}</option>\`).join('')}</select></div>
-        <div><label>Model</label><input class="ov-model" value="\${esc(o.model)}"></div>
+        <div><label>Model <span class="hint">(\${modelHint(o.worker)})</span></label>
+          <input class="ov-model" list="dl-\${o.worker}" value="\${esc(o.model)}"></div>
         <div style="flex:0;align-self:flex-end"><button class="ghost ov-remove">Remove</button></div>
       </div>
     </div>\`).join('');
@@ -218,6 +259,12 @@ function renderOverrides(overrides) {
     btn.addEventListener('click', (e) => {
       const i = Number(e.target.closest('[data-i]').dataset.i);
       collectOverrides().then((list) => { list.splice(i, 1); renderOverrides(list); });
+    }));
+  document.querySelectorAll('.ov-worker').forEach((sel) =>
+    sel.addEventListener('change', (e) => {
+      const card = e.target.closest('[data-i]');
+      card.querySelector('.ov-model').setAttribute('list', 'dl-' + e.target.value);
+      card.querySelector('.hint').textContent = '(' + modelHint(e.target.value) + ')';
     }));
 }
 
@@ -233,7 +280,7 @@ function renderAgents(agents) {
   $('agents').innerHTML = agents.map((a) => a.exists ? \`
     <div class="agent" data-name="\${a.name}" style="margin:6px 0">
       <span class="name">\${a.name}</span>
-      <input class="ag-model" value="\${esc(a.model ?? '')}">
+      <input class="ag-model" list="dl-claude" value="\${esc(a.model ?? '')}">
       <button class="ag-save">Save</button>
     </div>\` : \`
     <div class="agent" style="margin:6px 0">
@@ -256,12 +303,20 @@ async function load() {
   state = await (await fetch('/api/state')).json();
   $('paths').innerHTML = \`Repo: <code>\${esc(state.repoRoot)}</code> · Config: <code>\${esc(state.configPath)}</code>\` +
     (state.configExists ? '' : ' <b>(will be created on save)</b>');
+  $('datalists').innerHTML = Object.entries(state.options).map(([type, o]) =>
+    \`<datalist id="dl-\${type}">\${o.models.map((m) => \`<option value="\${esc(m)}">\`).join('')}</datalist>\`
+  ).join('') + \`<datalist id="dl-effort">\${state.options.codex.efforts.map((e) =>
+    \`<option value="\${e}">\`).join('')}</datalist>\`;
   const c = state.config;
   $('planner').value = c.planner;
   $('dw-type').innerHTML = WORKER_TYPES.map((t) =>
     \`<option \${t === c.defaultWorker.type ? 'selected' : ''}>\${t}</option>\`).join('');
   $('dw-model').value = c.defaultWorker.model;
+  $('dw-model').setAttribute('list', 'dl-' + c.defaultWorker.type);
+  $('dw-type').addEventListener('change', () =>
+    $('dw-model').setAttribute('list', 'dl-' + $('dw-type').value));
   $('dw-effort').value = c.defaultWorker.effort ?? '';
+  $('dw-effort').setAttribute('list', 'dl-effort');
   renderOverrides(c.overrides);
   renderAgents(state.agents);
 }
@@ -307,6 +362,7 @@ const server = http.createServer(async (req, res) => {
         configExists: config !== null,
         config: config ?? DEFAULT_CONFIG,
         agents: readAgents(),
+        options: getOptions(),
       });
     }
     if (req.method === 'POST' && req.url === '/api/config') {

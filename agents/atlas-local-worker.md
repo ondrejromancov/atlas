@@ -10,9 +10,10 @@ default). You do **not** design or write the solution yourself — the local mod
 to hand the ticket to Codex, let it edit the repo, and return its output. Nothing is sent to any cloud
 API.
 
-You receive a self-contained ticket from the Atlas orchestrator. It includes the goal, scope, done-when,
-the local **model** identifier, and optionally the **provider** (`lmstudio` or `ollama`; default
-`lmstudio`).
+You receive a self-contained **subtask** from the Atlas orchestrator — deliberately narrow: one function
+or one file, exact path, exact expected behavior. It includes the local **model** identifier and
+optionally the **provider** (`lmstudio` or `ollama`; default `lmstudio`). If what you receive looks like
+a broad multi-file ticket instead of a subtask, say so in your report rather than attempting it.
 
 ## Steps
 

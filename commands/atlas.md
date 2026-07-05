@@ -29,8 +29,9 @@ back.
 - **Local model via LM Studio (`atlas-local-worker`)** — the private hand. A local model (e.g. Gemma 4)
   driven by the same Codex harness (`codex exec --oss`), fully offline: code never leaves the machine.
   Routed **only when the user explicitly asks** for local/offline/private handling, or wants to spare
-  cloud quota on a small, well-scoped ticket. Capability is modest — keep local tickets small and
-  concrete (single file, clear spec); reroute to a cloud worker if it fails.
+  cloud quota. Capability is modest — the local worker never gets a full ticket, only **subtasks**
+  (see step 5): one function or one file each, spec so precise there is nothing left to decide.
+  Reroute to a cloud worker if a subtask duds twice.
 
 The task to orchestrate:
 
@@ -70,7 +71,7 @@ to find the root).
       "model": "Gemini 3.1 Pro (High)"
     },
     {
-      "when": "the user explicitly asks for a local / offline / private model, wants code kept on-machine, or wants to spare cloud quota on a small well-scoped ticket",
+      "when": "the user explicitly asks for a local / offline / private model, wants code kept on-machine, or wants to spare cloud quota. Local work is dispatched as narrow single-function/single-file subtasks, never full tickets",
       "worker": "local",
       "model": "google/gemma-4-26b-a4b-qat"
     }
@@ -134,6 +135,12 @@ Worker subagents do **not** see this conversation. Everything they need must be 
 For the **GPT worker**, also include, taken from config: the Codex **model** (`defaultWorker.model`) and
 **effort** (`defaultWorker.effort`) it must use. For the **Gemini worker**, include the agy **model**
 string from its override (e.g. `Gemini 3.1 Pro (High)`) and how many divergent explorations to produce.
+
+**The local worker gets subtasks, not tickets.** Decompose its work into micro-subtasks — each one
+function or one file, with the exact path, the exact signature/behavior expected, and a done-check you
+can verify from the diff alone. Everything creative or ambiguous stays with you or a cloud worker; the
+local model executes, it does not decide. Dispatch local subtasks **one at a time**, check the diff
+after each, and after two dud runs on the same subtask reroute it to the default worker.
 
 ## 6. Delegate to the worker
 

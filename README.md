@@ -12,7 +12,7 @@ expensive planner is used as seldom as possible.
 | **Workhorse** | GPT-5.5 via Codex CLI | `atlas-gpt-worker` | All implementation by default: backend, infra, scripts, frontend *logic*. Efficient code, weak visuals. |
 | **UI hand** | Claude Opus 4.8 | `atlas-claude-worker` | Visual UI only: layout, styling, design polish, animation implementation, accessibility. |
 | **Explorer** | Gemini 3.1 Pro via agy CLI | `atlas-gemini-worker` | Occasional throwaway HTML explorations in `.atlas/explorations/` — divergent concepts, style directions, animation experiments. Winning direction is then implemented by the UI hand / workhorse. |
-| **Private hand** | Local model (e.g. Gemma 4) via LM Studio, driven by `codex exec --oss` | `atlas-local-worker` | Opt-in only: offline/private tickets where code must stay on-machine, or quota-free handling of small well-scoped tasks. |
+| **Private hand** | Local model (e.g. Gemma 4) via LM Studio, driven by `codex exec --oss` | `atlas-local-worker` | Opt-in only: offline/private work where code must stay on-machine, or quota-free execution. Receives narrow single-function/single-file **subtasks**, never full tickets. |
 
 ## Why standalone (not a plugin)
 
@@ -96,7 +96,7 @@ lines of the installed `~/.claude/agents/atlas-*.md` files. Zero dependencies, l
       "model": "Gemini 3.1 Pro (High)"
     },
     {
-      "when": "the user explicitly asks for a local / offline / private model, wants code kept on-machine, or wants to spare cloud quota on a small well-scoped ticket",
+      "when": "the user explicitly asks for a local / offline / private model, wants code kept on-machine, or wants to spare cloud quota. Local work is dispatched as narrow single-function/single-file subtasks, never full tickets",
       "worker": "local",
       "model": "google/gemma-4-26b-a4b-qat"
     }
