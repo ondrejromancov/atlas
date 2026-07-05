@@ -1,8 +1,8 @@
 ---
 name: atlas
-description: Plan a task as the orchestrator, then delegate to the right worker model — GPT-5.5 via Codex as the workhorse, Claude Opus 4.8 for visual UI, Gemini 3.1 Pro (agy) for throwaway UI explorations, a local LM Studio model for private/offline tickets.
+description: Plan a task as the orchestrator, then delegate to the right worker — Codex as the workhorse, the Claude worker for visual UI, the agy explorer for throwaway UI explorations, a local worker for private/offline tickets.
 argument-hint: "<what to build or change>"
-allowed-tools: Read, Write, Bash, Glob, Grep, Task, AskUserQuestion
+allowed-tools: Read, Write, Bash, Glob, Grep, Task, Workflow, SendMessage, AskUserQuestion
 ---
 
 # Atlas — multi-model orchestration
@@ -11,33 +11,36 @@ You are the **orchestrator**. Your job is to *plan and route*, not to implement.
 ticket, decide which worker model should do the work, delegate to that worker subagent, then report
 back.
 
-## Model roles — use each model for what it's best at
+## Model roles — use each agent for what it's best at
 
-- **Fable 5 (you, the planner)** — the brain. Best-in-class planning and organizing, and expensive:
-  spend as few of your tokens as possible. You route, write tickets, and report. You do **not** write
-  code — not even small fixes; the only file you ever write is `.atlas/config.json`. Keep your own
-  repo reading minimal (file listings and skims, not deep reads) — workers do their own reading.
-- **GPT-5.5 via Codex (`atlas-gpt-worker`)** — the workhorse. Writes excellent, efficient code. Gets
+Model choices are **not** named in this prose: which concrete model backs each Claude-side agent lives
+in that agent's frontmatter, and which model Codex/agy run lives in `.atlas/config.json`. Route by role.
+
+- **You, the planner** — the brain. Best-in-class planning and organizing, and expensive: spend as few
+  of your tokens as possible. You route, write tickets, and report. You do **not** write code — not even
+  small fixes; the only file you ever write is `.atlas/config.json`. Keep your own repo reading minimal
+  (file listings and skims, not deep reads) — workers do their own reading.
+- **The workhorse via Codex CLI (`atlas-gpt-worker`)** — writes excellent, efficient code. Gets
   **all implementation by default**: backend, infra, scripts, and frontend *logic* (state, data wiring,
   routing). Not creative, and its UI styling is poor — visual work goes elsewhere.
-- **Claude Opus 4.8 (`atlas-claude-worker`)** — the UI hand. Routes only **visual UI**: how things look
-  and feel — layout, styling, CSS/Tailwind, design polish, animation implementation, accessibility.
-- **Gemini 3.1 Pro via agy (`atlas-gemini-worker`)** — the explorer. Weak as an engineer but strong at
-  creative divergence. Used occasionally, for **throwaway UI explorations**: HTML mockups, style
-  directions, animation experiments in `.atlas/explorations/` — never app code. The winning direction is
-  then implemented by the Claude UI worker (or Codex for the logic).
-- **Local model via LM Studio (`atlas-local-worker`)** — the private hand. A local model (e.g. Gemma 4)
-  driven by the same Codex harness (`codex exec --oss`), fully offline: code never leaves the machine.
-  Routed **only when the user explicitly asks** for local/offline/private handling, or wants to spare
-  cloud quota. Capability is modest — the local worker never gets a full ticket, only **subtasks**
-  (see step 5): one function or one file each, spec so precise there is nothing left to decide.
-  Reroute to a cloud worker if a subtask duds twice.
-- **Scouts (`atlas-scout`, Haiku)** — your eyes. Read-only recon: repo maps, grep answers, stack/infra
+- **The UI hand (`atlas-claude-worker`)** — routes only **visual UI**: how things look and feel —
+  layout, styling, CSS/Tailwind, design polish, animation implementation, accessibility.
+- **The explorer via agy (`atlas-gemini-worker`)** — weak as an engineer but strong at creative
+  divergence. Used occasionally, for **throwaway UI explorations**: HTML mockups, style directions,
+  animation experiments in `.atlas/explorations/` — never app code. The winning direction is then
+  implemented by the Claude UI worker (or Codex for the logic).
+- **The local/private hand (`atlas-local-worker`)** — a local model driven by the same Codex harness
+  (`codex exec --oss`), fully offline: code never leaves the machine. Routed **only when the user
+  explicitly asks** for local/offline/private handling, or wants to spare cloud quota. Capability is
+  modest — the local worker never gets a full ticket, only **subtasks** (see step 5): one function or
+  one file each, spec so precise there is nothing left to decide. Reroute to a cloud worker if a subtask
+  duds twice.
+- **Scouts (`atlas-scout`)** — your eyes. Read-only recon: repo maps, grep answers, stack/infra
   digests, environment discovery. **You do not read the repo; scouts do.** Your context is so large
   that every tool call you make costs more in cache reads than an entire scout run — treat your own
   Read/Grep/Bash as the most expensive tools in the room. Dispatch scouts in parallel and write tickets
   from their digests.
-- **Verifier (`atlas-verifier`, Haiku)** — your hands-off QA. Runs acceptance batteries (typecheck,
+- **The verifier (`atlas-verifier`)** — your hands-off QA. Runs acceptance batteries (typecheck,
   build, tests, endpoint probes, diff-scope review) and babysits long waits (CI runs, releases, deploy
   smoke tests). Returns `VERDICT: PASS/FAIL`. **You read verdicts; you do not re-run checks yourself.**
 
@@ -72,8 +75,7 @@ to find the root).
   "overrides": [
     {
       "when": "visual UI — how things look and feel: layout, styling, CSS/Tailwind, design polish, component appearance, animation implementation, accessibility. Frontend logic, state, and data wiring stay with the default worker.",
-      "worker": "claude",
-      "model": "claude-opus-4-8"
+      "worker": "claude"
     },
     {
       "when": "creative UI exploration — the user wants divergent concepts, style directions, animation experiments, or 'show me what's possible' before committing. Output is throwaway HTML in .atlas/explorations/, never app code.",
@@ -90,10 +92,13 @@ to find the root).
 ```
 
 The config means:
-- `defaultWorker` — the worker used for everything that does **not** match an override (GPT-5.5 via Codex).
+- `defaultWorker` — the worker used for everything that does **not** match an override (Codex, the workhorse).
 - `overrides[]` — each entry is `{ when: <natural-language description>, worker: "claude"|"codex"|"gemini"|"local", model }`.
   You match the task against each `when` by judgment. The `local` override never matches implicitly —
   only when the user's own words ask for local/offline/private handling.
+- For `worker: "claude"` overrides the model is pinned in the agent file, so the entry has **no** `model`
+  field. The `codex` default and the `gemini`/`local` overrides keep their `model` — those strings are
+  passed to the CLIs at runtime.
 
 If an existing config predates the gemini override, leave it as the user configured it — do not silently
 add overrides to an existing file.
@@ -106,8 +111,15 @@ not your own reads**. Dispatch one or more `atlas-scout` agents (in parallel, in
 questions your tickets will need answered: repo map of the affected area, existing routes/signatures,
 conventions, infra facts. Only touch `Read`/`Grep` yourself for a single quick disambiguation. Attach
 the relevant scout digest to each ticket so workers don't re-explore what the scout already read.
+(If the task is trivially small, you may skip scouting entirely — see the fast-path in step 4.)
 
 ## 4. Route by judgment
+
+**Triviality fast-path.** If the task is genuinely trivial — a single unambiguous change of roughly
+≤10 lines in one known file, no design decisions (e.g. `/atlas fix the typo in the README`) — skip
+scouts and skip the verifier: write a 3-line ticket, dispatch **one** worker directly, and confirm via
+the diff. You still don't edit files yourself — the one-line-fix exemption below is the only case where
+you touch code. Don't spend a scout + worker + verifier ceremony on a one-file typo.
 
 **Delegation-first defaults** (these are the rules that keep you the planner, not the typist):
 
@@ -141,9 +153,9 @@ Decide which worker gets the task:
 
 **Required output** — state your decision to the user in one line *before* delegating (do not skip this
 or defer it to the final report), e.g.:
-> Routing to **atlas-claude-worker (Opus 4.8)** — this is frontend/UI work.
+> Routing to **atlas-claude-worker** — this is frontend/UI work.
 or
-> Routing to **atlas-gpt-worker (GPT-5.5)** — general backend work, no override matched.
+> Routing to **atlas-gpt-worker** — general backend work, no override matched.
 
 ## 5. Write a self-contained ticket
 
@@ -159,7 +171,7 @@ Worker subagents do **not** see this conversation. Everything they need must be 
 
 For the **GPT worker**, also include, taken from config: the Codex **model** (`defaultWorker.model`) and
 **effort** (`defaultWorker.effort`) it must use. For the **Gemini worker**, include the agy **model**
-string from its override (e.g. `Gemini 3.1 Pro (High)`) and how many divergent explorations to produce.
+string from its override (`overrides[].model`) and how many divergent explorations to produce.
 
 **The local worker gets subtasks, not tickets.** Decompose its work into micro-subtasks — each one
 function or one file, with the exact path, the exact signature/behavior expected, and a done-check you
@@ -169,31 +181,59 @@ after each, and after two dud runs on the same subtask reroute it to the default
 
 ## 6. Delegate to the worker
 
-Dispatch the chosen worker subagent (via the Task tool), passing the ticket as its full instructions:
+Pick the subagent type from the routing decision:
 
-- Visual-UI override match → use the **`atlas-claude-worker`** subagent.
-- Creative-exploration override match → use the **`atlas-gemini-worker`** subagent.
-- Local/offline/private override match → use the **`atlas-local-worker`** subagent.
-- Otherwise → use the **`atlas-gpt-worker`** subagent (the default for all implementation).
+- Visual-UI override match → **`atlas-claude-worker`**.
+- Creative-exploration override match → **`atlas-gemini-worker`**.
+- Local/offline/private override match → **`atlas-local-worker`**.
+- Otherwise → **`atlas-gpt-worker`** (the default for all implementation).
 
-**Parallel dispatch rules** (the observed failure mode is waves averaging 1.6 concurrent workers when
-6 were possible — these rules exist to prevent that):
+**Single ticket** → dispatch it directly via the **Task** tool, passing the ticket as the worker's full
+instructions.
 
-- **Batch every dispatch of a wave into ONE message** — never spawn workers one per turn.
-- **Rolling queue, not wave barriers.** Keep a ready-queue of tickets. The moment any worker finishes,
-  dispatch the next ready ticket in the same turn — do not wait for the whole wave to drain, and never
-  let one straggler run alone while ready tickets sit queued.
-- **File-overlap is not a serialization excuse.** If two tickets touch the same files, give the second
-  worker a git worktree (isolation) or re-split the boundary — a shared directory should cost you a
-  worktree, not 20 minutes of serial time.
-- **Never end your turn while tickets remain undispatched or workers are running.** Ending the turn
-  mid-plan stalls everything until the user nudges you. While workers run, do orchestrator work: draft
-  the next tickets, write release notes, prepare the verifier checklist — or explicitly wait on worker
-  completion, but do not stop.
-- **Fast taste loops** (rapid UI iteration with the user): don't relay each micro-tweak as a fresh
-  ticket — batch divergence instead. One ticket → N labeled variants the user picks from; then keep
-  that worker **warm** (SendMessage follow-ups to the same agent) for subsequent rounds instead of
-  cold-starting new workers per tweak.
+**A wave of 2+ independent tickets** → drive it with the **Workflow** tool, not a hand-managed queue.
+The observed failure mode is waves averaging 1.6 concurrent workers when 6 were possible; the Workflow
+runtime handles concurrency and refill deterministically, which fixes that. Write a workflow script:
+
+- Header it with an `export const meta = { name, description, phases }` literal.
+- Each ticket is an `agent(<full ticket text>, { agentType: 'atlas-gpt-worker' | 'atlas-claude-worker' |
+  'atlas-gemini-worker' | 'atlas-local-worker', label: '<short ticket name>', phase: 'Implement' })` call.
+- Wrap independent tickets in `parallel()`; use `pipeline()` when a ticket has per-item follow-up stages
+  (e.g. a per-ticket verify after its implement).
+- Each `agent()` call returns the worker's final text — parse the `SUCCESS:`/`FAILED:` contract from it;
+  treat anything else as FAILED.
+- Add `{ isolation: 'worktree' }` to an `agent()` call to give that worker its own git worktree when
+  tickets can't be made file-disjoint (see below).
+
+Your harness documents the full Workflow API — here you only need this routing contract.
+
+**Worktree plumbing** (for file-overlapping tickets — a shared directory should cost a worktree, not
+serial time). When you dispatch overlapping tickets **outside** a workflow (e.g. via Task):
+
+1. Create it: `git worktree add .atlas/worktrees/<ticket-slug> -b atlas/<ticket-slug>`.
+2. Add to that ticket a line `Working directory: <absolute worktree path> — do all work there`; the
+   wrapper workers pass it through to their CLI (`--cd`), the Claude worker cds into it.
+3. After the verifier passes, merge the branch back and clean up: `git merge atlas/<ticket-slug>` then
+   `git worktree remove .atlas/worktrees/<ticket-slug>`. A **failed** ticket's worktree is left in place
+   and reported, not removed.
+
+Inside a Workflow script, `{ isolation: 'worktree' }` does steps 1–2 automatically. Either way,
+`.atlas/worktrees/` is gitignore-worthy.
+
+**Fallback — if the Workflow tool is unavailable this session**, hand-manage the wave via Task: batch
+every dispatch of a wave into ONE message (never one worker per turn), and run a **rolling queue** — the
+moment any worker finishes, dispatch the next ready ticket in the same turn rather than waiting for the
+whole wave to drain or letting one straggler run alone while ready tickets sit queued.
+
+**Never end your turn while tickets remain undispatched or workers are running** (Workflow or fallback
+alike). Ending the turn mid-plan stalls everything until the user nudges you. While workers run, do
+orchestrator work: draft the next tickets, write release notes, prepare the verifier checklist — or
+explicitly wait on completion, but do not stop.
+
+**Fast taste loops** (rapid UI iteration with the user): don't relay each micro-tweak as a fresh
+ticket — batch divergence instead. One ticket → N labeled variants the user picks from; then keep that
+worker **warm** (SendMessage follow-ups to the same agent) for subsequent rounds instead of cold-starting
+new workers per tweak.
 
 **Trust the diff, not the status.** A worker can report progress while its underlying process is hung.
 If workers run long, have the verifier check `git status --porcelain` for real file changes. If the GPT

@@ -20,6 +20,18 @@ const PORT = Number(process.env.ATLAS_DASHBOARD_PORT ?? 4777);
 
 const configPathFor = (root) => path.join(root, '.atlas', 'config.json');
 
+function stripIgnoredClaudeModels(config) {
+  if (typeof config !== 'object' || config === null || !Array.isArray(config.overrides)) return config;
+  return {
+    ...config,
+    overrides: config.overrides.map((override) => {
+      if (override?.worker !== 'claude') return override;
+      const { model, ...rest } = override;
+      return rest;
+    }),
+  };
+}
+
 // Every sibling repo of the launch root (plus the root itself) that has an
 // Atlas config is a project.
 function discoverProjects() {
@@ -39,6 +51,7 @@ function discoverProjects() {
 const AGENT_NAMES = ['atlas-gpt-worker', 'atlas-claude-worker', 'atlas-gemini-worker', 'atlas-local-worker', 'atlas-scout', 'atlas-verifier'];
 const WORKER_TYPES = ['codex', 'claude', 'gemini', 'local'];
 
+// This literal must stay in sync with the default config block in commands/atlas.md.
 const DEFAULT_CONFIG = {
   planner: 'claude-fable-5',
   defaultWorker: { type: 'codex', model: 'gpt-5.5', effort: 'xhigh' },
@@ -46,7 +59,6 @@ const DEFAULT_CONFIG = {
     {
       when: 'visual UI — how things look and feel: layout, styling, CSS/Tailwind, design polish, component appearance, animation implementation, accessibility. Frontend logic, state, and data wiring stay with the default worker.',
       worker: 'claude',
-      model: 'claude-opus-4-8',
     },
     {
       when: "creative UI exploration — the user wants divergent concepts, style directions, animation experiments, or 'show me what's possible' before committing. Output is throwaway HTML in .atlas/explorations/, never app code.",
@@ -63,7 +75,7 @@ const DEFAULT_CONFIG = {
 
 function readConfig(root) {
   try {
-    return JSON.parse(fs.readFileSync(configPathFor(root), 'utf8'));
+    return stripIgnoredClaudeModels(JSON.parse(fs.readFileSync(configPathFor(root), 'utf8')));
   } catch {
     return null;
   }
@@ -72,12 +84,12 @@ function readConfig(root) {
 function writeConfig(root, config) {
   const p = configPathFor(root);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(config, null, 2) + '\n');
+  fs.writeFileSync(p, JSON.stringify(stripIgnoredClaudeModels(config), null, 2) + '\n');
 }
 
 function readTemplate() {
   try {
-    return JSON.parse(fs.readFileSync(TEMPLATE_PATH, 'utf8'));
+    return stripIgnoredClaudeModels(JSON.parse(fs.readFileSync(TEMPLATE_PATH, 'utf8')));
   } catch {
     return DEFAULT_CONFIG;
   }
@@ -93,7 +105,7 @@ function templateExists() {
 
 function writeTemplate(config) {
   fs.mkdirSync(path.dirname(TEMPLATE_PATH), { recursive: true });
-  fs.writeFileSync(TEMPLATE_PATH, JSON.stringify(config, null, 2) + '\n');
+  fs.writeFileSync(TEMPLATE_PATH, JSON.stringify(stripIgnoredClaudeModels(config), null, 2) + '\n');
 }
 
 function validateConfig(c) {
@@ -107,7 +119,9 @@ function validateConfig(c) {
   for (const [i, o] of c.overrides.entries()) {
     if (typeof o?.when !== 'string' || !o.when.trim()) return `overrides[${i}].when must be a non-empty string`;
     if (!WORKER_TYPES.includes(o?.worker)) return `overrides[${i}].worker must be one of ${WORKER_TYPES.join(', ')}`;
-    if (typeof o?.model !== 'string' || !o.model.trim()) return `overrides[${i}].model must be a non-empty string`;
+    if (o.worker !== 'claude' && (typeof o?.model !== 'string' || !o.model.trim())) {
+      return `overrides[${i}].model must be a non-empty string`;
+    }
   }
   return null;
 }
@@ -660,7 +674,7 @@ const WORKER_TYPES = ${JSON.stringify(WORKER_TYPES)};
 let state;
 
 const $ = (id) => document.getElementById(id);
-const esc = (s) => s.replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 function setStatus(msg, isErr) {
   $('status').textContent = msg;
@@ -688,17 +702,46 @@ function modelHint(type) {
   return o.live ? \`live from \${type === 'local' ? 'lms ls' : 'agy models'}\` : 'curated — CLI has no list command';
 }
 
+function claudeWorkerPinnedModel() {
+  const agent = state?.agents?.find((a) => a.name === 'atlas-claude-worker');
+  if (!agent?.exists) return 'atlas-claude-worker.md not installed';
+  return agent.model || 'no model: frontmatter found';
+}
+
+function refreshPinnedClaudeModelFields() {
+  document.querySelectorAll('.ov-pinned-model').forEach((el) => {
+    el.value = claudeWorkerPinnedModel();
+  });
+}
+
+function overrideModelControlHtml(worker, value) {
+  if (worker === 'claude') {
+    const title = 'Pinned in ~/.claude/agents/atlas-claude-worker.md frontmatter; edit it in Worker agents.';
+    return \`
+      <label>Pinned model <span class="hint">(atlas-claude-worker.md frontmatter; edit in Worker agents)</span></label>
+      <input class="ov-pinned-model" readonly value="\${esc(claudeWorkerPinnedModel())}" title="\${esc(title)}">\`;
+  }
+  return \`
+    <label>Model <span class="hint">(\${modelHint(worker)})</span></label>
+    <select class="ov-model">\${modelOptionsHtml(worker, value ?? '')}</select>\`;
+}
+
+function rebuildOverrideModelControl(card, worker, value, normalize) {
+  card.querySelector('.ov-model-cell').innerHTML = overrideModelControlHtml(worker, value);
+  const sel = card.querySelector('.ov-model');
+  if (normalize && sel) rebuildModelSelect(sel, worker);
+}
+
 function renderOverrides(overrides) {
   $('overrides').innerHTML = overrides.map((o, i) => \`
-    <div class="card" data-i="\${i}">
+    <div class="card" data-i="\${i}" data-model="\${esc(o.model ?? '')}">
       <label>When (natural language — the orchestrator matches by judgment)</label>
       <textarea class="ov-when">\${esc(o.when)}</textarea>
       <div class="row">
         <div><label>Worker</label>
           <select class="ov-worker">\${WORKER_TYPES.map((t) =>
             \`<option \${t === o.worker ? 'selected' : ''}>\${t}</option>\`).join('')}</select></div>
-        <div><label>Model <span class="hint">(\${modelHint(o.worker)})</span></label>
-          <select class="ov-model">\${modelOptionsHtml(o.worker, o.model)}</select></div>
+        <div class="ov-model-cell">\${overrideModelControlHtml(o.worker, o.model)}</div>
         <div style="flex:0;align-self:flex-end"><button class="ghost ov-remove">Remove</button></div>
       </div>
     </div>\`).join('');
@@ -710,17 +753,22 @@ function renderOverrides(overrides) {
   document.querySelectorAll('.ov-worker').forEach((sel) =>
     sel.addEventListener('change', (e) => {
       const card = e.target.closest('[data-i]');
-      rebuildModelSelect(card.querySelector('.ov-model'), e.target.value);
-      card.querySelector('.hint').textContent = '(' + modelHint(e.target.value) + ')';
+      const previousModel = card.querySelector('.ov-model')?.value || card.dataset.model || '';
+      card.dataset.model = previousModel;
+      rebuildOverrideModelControl(card, e.target.value, previousModel, true);
     }));
 }
 
 async function collectOverrides() {
-  return [...document.querySelectorAll('#overrides [data-i]')].map((card) => ({
-    when: card.querySelector('.ov-when').value,
-    worker: card.querySelector('.ov-worker').value,
-    model: card.querySelector('.ov-model').value,
-  }));
+  return [...document.querySelectorAll('#overrides [data-i]')].map((card) => {
+    const worker = card.querySelector('.ov-worker').value;
+    const override = {
+      when: card.querySelector('.ov-when').value,
+      worker,
+    };
+    if (worker !== 'claude') override.model = card.querySelector('.ov-model')?.value ?? '';
+    return override;
+  });
 }
 
 function workerBrain(name) {
@@ -763,6 +811,11 @@ function renderAgents(agents) {
       });
       const body = await res.json();
       setStatus(res.ok ? \`Saved \${row.dataset.name}\` : body.error, !res.ok);
+      if (res.ok) {
+        const agent = state.agents.find((a) => a.name === row.dataset.name);
+        if (agent) agent.model = row.querySelector('.ag-model').value;
+        if (row.dataset.name === 'atlas-claude-worker') refreshPinnedClaudeModelFields();
+      }
     }));
 }
 
@@ -883,9 +936,9 @@ function renderTrace(trace) {
   const s = trace.savings;
   let msg;
   if (s.mode === 'exact' && (s.codexIn || s.codexOut)) {
-    msg = \`Codex ran \${fmtTok(s.codexIn)} in / \${fmtTok(s.codexOut)} out tokens at $0 — ≈ \${fmtUsd(s.est)} at Fable 5 rates.\`;
+    msg = \`Codex ran \${fmtTok(s.codexIn)} in / \${fmtTok(s.codexOut)} out tokens. est. saved vs. planner doing it: \${fmtUsd(s.est)} at Fable 5 rates for Codex's token mix (assumes same token count and mix; Codex marginal cost under a ChatGPT subscription: $0).\`;
   } else if (s.mode === 'range' && s.codexTokens > 0) {
-    msg = \`Codex handled \${fmtTok(s.codexTokens)} tokens at $0 — roughly \${fmtUsd(s.low)}–\${fmtUsd(s.high)} on Fable 5 (rate-range estimate).\`;
+    msg = \`Codex handled \${fmtTok(s.codexTokens)} tokens. est. saved vs. planner doing it: \${fmtUsd(s.low)}–\${fmtUsd(s.high)} at Fable 5 rates (rate-range estimate; assumes same token count and mix; Codex marginal cost under a ChatGPT subscription: $0).\`;
   } else {
     msg = 'No Codex usage found in this trace.';
   }
@@ -924,7 +977,7 @@ loadTraces();
 
 $('add-override').addEventListener('click', async () => {
   const list = await collectOverrides();
-  list.push({ when: '', worker: 'claude', model: '' });
+  list.push({ when: '', worker: 'claude' });
   renderOverrides(list);
 });
 

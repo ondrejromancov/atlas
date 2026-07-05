@@ -16,6 +16,11 @@ expensive planner is used as seldom as possible.
 | **Scout** | Claude Sonnet 5 | `atlas-scout` | Read-only recon that fuels tickets: repo maps, grep answers, infra digests, env discovery. The planner never reads the repo itself — its cache-read cost per turn exceeds an entire scout run. |
 | **Verifier** | Claude Haiku | `atlas-verifier` | Acceptance batteries (typecheck/build/tests/probes/diff-scope) and long waits (CI watch, release smoke tests). Returns `VERDICT: PASS/FAIL`; the planner reads verdicts instead of re-running checks. |
 
+The models above are the shipped defaults. The **authoritative** source is each agent's frontmatter
+(`model:`) plus `.atlas/config.json` for the Codex/agy/local models — the `/atlas` prose no longer names
+models. The wrapper agents themselves run on Haiku; the table's model is the CLI-driven one they forward
+the ticket to.
+
 ## Why standalone (not a plugin)
 
 Claude Code always namespaces plugin commands (`/plugin:command`). To get a bare `/atlas`, this ships as
@@ -23,14 +28,19 @@ standalone user config in `~/.claude/`, not as a marketplace plugin.
 
 ## Install
 
-Copy the files into your Claude Code user config:
+Clone the repo and run the installer:
 
 ```bash
 git clone https://github.com/ondrejromancov/atlas.git
 cd atlas
-cp commands/atlas.md ~/.claude/commands/
-cp agents/atlas-*.md ~/.claude/agents/
+./install.sh
 ```
+
+`install.sh` **symlinks** the command, the agents, and the `scripts/` directory into `~/.claude`. It
+backs up any existing regular files to `*.bak.<timestamp>` and is idempotent (re-running it is a no-op
+once the links are in place). Because the links point back at the clone, **the repo is the live
+install**: editing a repo file — or the dashboard editing an agent's frontmatter through the symlink —
+takes effect immediately, with no re-install and none of the copy-drift the old `cp` flow suffered.
 
 Repo layout mirrors the install destination:
 
@@ -42,6 +52,7 @@ agents/atlas-gemini-worker.md   → ~/.claude/agents/atlas-gemini-worker.md  # e
 agents/atlas-local-worker.md    → ~/.claude/agents/atlas-local-worker.md   # private hand → codex --oss (LM Studio)
 agents/atlas-scout.md           → ~/.claude/agents/atlas-scout.md          # recon → Sonnet 5, read-only
 agents/atlas-verifier.md        → ~/.claude/agents/atlas-verifier.md       # acceptance checks → Haiku
+scripts/                        → ~/.claude/atlas/scripts                  # run-codex.sh / run-agy.sh wrappers
 dashboard.mjs                   # config dashboard (run from anywhere, no install)
 <repo>/.atlas/config.json       # per-repo routing config (auto-created on first /atlas run)
 ```
@@ -88,7 +99,9 @@ all) keeps repo configs in sync. `/atlas` bootstraps new repos from the template
 The config editor edits the selected repo's `.atlas/config.json` (planner, default worker, overrides)
 and the pinned `model:` lines of the installed `~/.claude/agents/atlas-*.md` files. Model dropdowns are
 populated live from `agy models` and `lms ls` where those CLIs can enumerate; curated lists elsewhere.
-Zero dependencies, localhost only.
+The `claude` override carries no model of its own, so its row shows the pinned agent-file model
+**read-only** — matching reality instead of offering an editable field that never took effect. Zero
+dependencies, localhost only.
 
 The **Traces** section shows, per Atlas run, a per-model activity timeline and a token/cost breakdown.
 Claude usage comes from the repo's Claude Code transcripts; the other models come from their own CLIs'
@@ -98,8 +111,10 @@ local logs, matched to the run's time window:
 - **Gemini** — `~/.gemini/antigravity-cli/history.jsonl` (per-turn activity, attributed by workspace)
 - **Local** — `~/.lmstudio/server-logs/` (per-request prompt tokens; time-window attribution only)
 
-The savings line prices Codex's actual token mix at Fable 5 rates — what that work would have cost if
-the planner had done it itself.
+The savings line is an **estimate**: it prices Codex's actual token mix at Fable 5 rates — roughly what
+that work would have cost had the planner done it itself. Two caveats are stated inline: it assumes the
+planner would have spent the same token count, and it ignores that Codex's marginal cost under a ChatGPT
+subscription is effectively $0.
 
 ## Config (`.atlas/config.json`)
 
@@ -110,8 +125,7 @@ the planner had done it itself.
   "overrides": [
     {
       "when": "visual UI — how things look and feel: layout, styling, CSS/Tailwind, design polish, component appearance, animation implementation, accessibility. Frontend logic, state, and data wiring stay with the default worker.",
-      "worker": "claude",
-      "model": "claude-opus-4-8"
+      "worker": "claude"
     },
     {
       "when": "creative UI exploration — divergent concepts, style directions, animation experiments before committing. Output is throwaway HTML in .atlas/explorations/, never app code.",
@@ -130,7 +144,9 @@ the planner had done it itself.
 - `defaultWorker` — used for anything that doesn't match an override. Its `model`/`effort` are passed to
   `codex exec` at runtime, so you can change them here freely.
 - `overrides[]` — each `{ when, worker, model }`; the orchestrator matches your task against `when` by
-  judgment, top to bottom.
+  judgment, top to bottom. The `codex`/`gemini`/`local` workers carry a `model` string passed to their
+  CLI; the `claude` override has **no** `model` field — its model is pinned in the agent frontmatter, and
+  an old config that still carries the field is tolerated (the field is ignored).
 
 ## Delegation-first rules (v3 — from a 5-session token autopsy)
 
@@ -142,9 +158,17 @@ Haiku worker session. Atlas sessions cost 5–10× less. Hence:
   ticket board — dispatch it, don't execute item 1 yourself. (Also installed as a default posture in
   the user-level CLAUDE.md so non-/atlas sessions don't regress to solo.)
 - **Scouts, not self-reads**: tickets are fueled by parallel `atlas-scout` digests (Sonnet 5 — recon quality matters, and it is still ~15x cheaper than planner turns; only the mechanical verifier stays on Haiku).
-- **Rolling dispatch**: batch a wave's spawns in one message; refill from the ready-queue the moment any
-  worker finishes; worktrees instead of serializing on file overlap; never end the turn with tickets
-  pending (observed: avg 1.6 concurrent workers when 6 were possible, plus user-nudge stalls).
+- **Deterministic wave dispatch**: a wave of 2+ independent tickets is driven by Claude Code's **Workflow**
+  tool (`agentType` per worker, `parallel()`/`pipeline()`, optional `{ isolation: 'worktree' }`), so
+  concurrency and refill are runtime-enforced rather than prompt-enforced. The prose rolling-queue rules
+  (batch spawns in one message, refill from the ready-queue, never end the turn with tickets pending)
+  remain the fallback when the Workflow tool is unavailable (observed: avg 1.6 concurrent workers when 6
+  were possible, plus user-nudge stalls).
+- **Triviality fast-path**: a genuinely trivial single-file change (≤~10 lines, no design decision) skips
+  scouts and the verifier — one 3-line ticket, one worker, confirm via the diff.
+- **Worktree isolation for overlap**: tickets that can't be made file-disjoint each get their own git
+  worktree instead of serializing on the shared directory (automatic under Workflow, or an explicit
+  `git worktree add … -b atlas/<slug>` recipe when dispatched via Task).
 - **Verify once, cheaply**: workers self-verify at the right layer (browser for UI); `atlas-verifier`
   runs the acceptance battery and CI watches; the planner reads verdicts (observed: double-paid
   verification every wave).
@@ -155,7 +179,10 @@ Haiku worker session. Atlas sessions cost 5–10× less. Hence:
 
 ## Field-tested reliability rules (v1.1)
 
-Baked in after real-world runs:
+Baked in after real-world runs. Workers no longer hand-compose CLI flags — they write the ticket to a
+file, run `scripts/run-codex.sh` / `scripts/run-agy.sh`, interpret the exit code (0 ok, 3 = dud, 2 = CLI
+missing, 1 = failed), verify the diff, and report the printed `FILES CHANGED` list and log path. So the
+first two rules below are now **guaranteed by the scripts** rather than per prompt; they stay as rationale:
 
 - **`codex exec` / `agy` always run with `< /dev/null`** — without it they can hang indefinitely at
   "Reading additional input from stdin…" in non-interactive shells (hit twice, ~10+ min lost each time).
@@ -168,9 +195,6 @@ Baked in after real-world runs:
 
 ## Known limitations
 
-- **Worker models are pinned in the agent files' frontmatter.** Claude Code fixes a subagent's model in
-  its definition, so the `model` field of a `claude` override is documentation — change the pinned model
-  via the dashboard or by editing the agent file.
 - **The planner (Fable 5) is your session model** — recommended, not forced (config/tools can't set the
   main session's model).
 - No cross-model review or verify/fix loop yet (that's the sous-chef `/serve` upgrade path).
