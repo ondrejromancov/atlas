@@ -40,6 +40,8 @@ agents/atlas-gpt-worker.md      → ~/.claude/agents/atlas-gpt-worker.md     # w
 agents/atlas-claude-worker.md   → ~/.claude/agents/atlas-claude-worker.md  # UI worker → Opus 4.8
 agents/atlas-gemini-worker.md   → ~/.claude/agents/atlas-gemini-worker.md  # explorer → agy (Gemini 3.1 Pro)
 agents/atlas-local-worker.md    → ~/.claude/agents/atlas-local-worker.md   # private hand → codex --oss (LM Studio)
+agents/atlas-scout.md           → ~/.claude/agents/atlas-scout.md          # recon → Sonnet 5, read-only
+agents/atlas-verifier.md        → ~/.claude/agents/atlas-verifier.md       # acceptance checks → Haiku
 dashboard.mjs                   # config dashboard (run from anywhere, no install)
 <repo>/.atlas/config.json       # per-repo routing config (auto-created on first /atlas run)
 ```
