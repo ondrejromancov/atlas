@@ -14,9 +14,27 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 
 const repoRoot = path.resolve(process.argv[2] ?? process.cwd());
-const configPath = path.join(repoRoot, '.atlas', 'config.json');
 const agentsDir = path.join(os.homedir(), '.claude', 'agents');
+const TEMPLATE_PATH = path.join(os.homedir(), '.claude', 'atlas', 'config.json');
 const PORT = Number(process.env.ATLAS_DASHBOARD_PORT ?? 4777);
+
+const configPathFor = (root) => path.join(root, '.atlas', 'config.json');
+
+// Every sibling repo of the launch root (plus the root itself) that has an
+// Atlas config is a project.
+function discoverProjects() {
+  const roots = new Set([repoRoot]);
+  try {
+    const parent = path.dirname(repoRoot);
+    for (const d of fs.readdirSync(parent)) {
+      const r = path.join(parent, d);
+      try {
+        if (fs.statSync(configPathFor(r)).isFile()) roots.add(r);
+      } catch {}
+    }
+  } catch {}
+  return [...roots].sort();
+}
 
 const AGENT_NAMES = ['atlas-gpt-worker', 'atlas-claude-worker', 'atlas-gemini-worker', 'atlas-local-worker'];
 const WORKER_TYPES = ['codex', 'claude', 'gemini', 'local'];
@@ -35,20 +53,47 @@ const DEFAULT_CONFIG = {
       worker: 'gemini',
       model: 'Gemini 3.1 Pro (High)',
     },
+    {
+      when: 'the user explicitly asks for a local / offline / private model, wants code kept on-machine, or wants to spare cloud quota. Local work is dispatched as narrow single-function/single-file subtasks, never full tickets',
+      worker: 'local',
+      model: 'google/gemma-4-26b-a4b-qat',
+    },
   ],
 };
 
-function readConfig() {
+function readConfig(root) {
   try {
-    return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    return JSON.parse(fs.readFileSync(configPathFor(root), 'utf8'));
   } catch {
     return null;
   }
 }
 
-function writeConfig(config) {
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+function writeConfig(root, config) {
+  const p = configPathFor(root);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(config, null, 2) + '\n');
+}
+
+function readTemplate() {
+  try {
+    return JSON.parse(fs.readFileSync(TEMPLATE_PATH, 'utf8'));
+  } catch {
+    return DEFAULT_CONFIG;
+  }
+}
+
+function templateExists() {
+  try {
+    return fs.statSync(TEMPLATE_PATH).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function writeTemplate(config) {
+  fs.mkdirSync(path.dirname(TEMPLATE_PATH), { recursive: true });
+  fs.writeFileSync(TEMPLATE_PATH, JSON.stringify(config, null, 2) + '\n');
 }
 
 function validateConfig(c) {
@@ -125,7 +170,7 @@ const LANES = [
 
 // Codex rollouts: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl — per-turn
 // token_count events with timestamps; session_meta carries the cwd.
-function collectCodexEvents(startMs, endMs, events) {
+function collectCodexEvents(root, startMs, endMs, events) {
   const base = path.join(os.homedir(), '.codex', 'sessions');
   const pad = Math.max(endMs - startMs, 120_000) * 0 + 120_000;
   const seen = new Set();
@@ -141,7 +186,7 @@ function collectCodexEvents(startMs, endMs, events) {
       if (!f.endsWith('.jsonl')) continue;
       let txt;
       try { txt = fs.readFileSync(path.join(dir, f), 'utf8'); } catch { continue; }
-      if (!txt.includes('"cwd":"' + repoRoot + '"')) continue;
+      if (!txt.includes('"cwd":"' + root + '"')) continue;
       for (const line of txt.split('\n')) {
         if (!line.includes('"token_count"')) continue;
         let o;
@@ -163,7 +208,7 @@ function collectCodexEvents(startMs, endMs, events) {
 
 // agy history: ~/.gemini/antigravity-cli/history.jsonl — one line per turn
 // with workspace + ms timestamp. No token counts; activity markers only.
-function collectGeminiEvents(startMs, endMs, events) {
+function collectGeminiEvents(root, startMs, endMs, events) {
   let txt;
   try {
     txt = fs.readFileSync(path.join(os.homedir(), '.gemini', 'antigravity-cli', 'history.jsonl'), 'utf8');
@@ -172,7 +217,7 @@ function collectGeminiEvents(startMs, endMs, events) {
     if (!line) continue;
     let o;
     try { o = JSON.parse(line); } catch { continue; }
-    if (o.workspace !== repoRoot) continue;
+    if (o.workspace !== root) continue;
     const ts = o.timestamp;
     if (!Number.isFinite(ts) || ts < startMs - 120_000 || ts > endMs + 120_000) continue;
     events.push({ ts, lane: 'gemini', marker: true });
@@ -372,10 +417,11 @@ function buildTrace(id, label, events) {
   };
 }
 
-let tracesCache = { at: 0, value: null };
-function getTraces() {
-  if (tracesCache.value && Date.now() - tracesCache.at < 60_000) return tracesCache.value;
-  const projDir = path.join(os.homedir(), '.claude', 'projects', repoRoot.replace(/[/.]/g, '-'));
+const tracesCache = new Map();
+function getTraces(root) {
+  const hit = tracesCache.get(root);
+  if (hit && Date.now() - hit.at < 60_000) return hit.value;
+  const projDir = path.join(os.homedir(), '.claude', 'projects', root.replace(/[/.]/g, '-'));
   const traces = [];
   let files = [];
   try {
@@ -409,13 +455,13 @@ function getTraces() {
       if (ev.ts < s) s = ev.ts;
       if (ev.ts > e) e = ev.ts;
     }
-    collectCodexEvents(s, e, events);
-    collectGeminiEvents(s, e, events);
+    collectCodexEvents(root, s, e, events);
+    collectGeminiEvents(root, s, e, events);
     collectLocalEvents(s, e, events);
     traces.push(buildTrace(f.replace(/\.jsonl$/, ''), firstUserLabel(txt), events));
   }
   traces.sort((a, b) => b.start - a.start);
-  tracesCache = { at: Date.now(), value: traces };
+  tracesCache.set(root, { at: Date.now(), value: traces });
   return traces;
 }
 
@@ -524,6 +570,18 @@ const PAGE = `<!doctype html>
   .axis { display: grid; grid-template-columns: 150px 1fr; gap: 10px; }
   .axis .ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--viz-muted);
     border-top: 1px solid var(--viz-axis); padding-top: 3px; font-variant-numeric: tabular-nums; }
+  #projects-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  #projects-table th { text-align: right; font-weight: 500; color: var(--muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .05em; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+  #projects-table th:first-child, #projects-table td:first-child { text-align: left; }
+  #projects-table td { padding: 6px 8px; text-align: right; font-variant-numeric: tabular-nums;
+    border-bottom: 1px solid var(--viz-grid); cursor: pointer; }
+  #projects-table tr:last-child td { border-bottom: none; }
+  #projects-table tr.sel td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  #projects-table td .pname { font-weight: 600; }
+  #projects-table .sync-ok { color: var(--accent); }
+  #projects-table .sync-no { color: var(--danger); }
+  #projects-table button { padding: 3px 10px; font-size: 12px; }
   #trace-table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px; }
   #trace-table th { text-align: right; font-weight: 500; color: var(--muted); font-size: 11px;
     text-transform: uppercase; letter-spacing: .05em; padding: 4px 8px; border-bottom: 1px solid var(--line); }
@@ -541,6 +599,15 @@ const PAGE = `<!doctype html>
 <main>
   <h1>Atlas dashboard</h1>
   <p class="sub" id="paths"></p>
+
+  <h2>Projects <span class="role">every repo with an Atlas config · base-template sync</span></h2>
+  <div class="card">
+    <table id="projects-table"></table>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+      <button id="apply-all">Apply base template to all</button>
+      <span class="sub" id="template-info" style="margin:0"></span>
+    </div>
+  </div>
 
   <h2>Planner</h2>
   <div class="card">
@@ -582,6 +649,7 @@ const PAGE = `<!doctype html>
 
   <div class="bar">
     <button class="primary" id="save">Save config</button>
+    <button id="save-template">Save as base template</button>
     <span id="status"></span>
   </div>
   <div id="datalists"></div>
@@ -683,9 +751,61 @@ function renderAgents(agents) {
     }));
 }
 
+let currentRoot = null;
+const rootQ = () => currentRoot ? '?root=' + encodeURIComponent(currentRoot) : '';
+
+async function loadOverview() {
+  const ov = await (await fetch('/api/overview')).json();
+  $('projects-table').innerHTML = \`
+    <tr><th>Project</th><th>Traces</th><th>Last run</th><th>Billed</th><th>Saved</th><th>Template</th><th></th></tr>\` +
+    ov.projects.map((pr) => \`
+    <tr data-root="\${esc(pr.root)}" class="\${pr.root === currentRoot ? 'sel' : ''}">
+      <td><span class="pname">\${esc(pr.name)}</span></td>
+      <td>\${pr.traceCount}</td>
+      <td>\${pr.lastRun ? new Date(pr.lastRun).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '—'}</td>
+      <td>\${pr.traceCount ? '$' + pr.billed.toFixed(0) : '—'}</td>
+      <td>\${pr.saved > 0 ? '$' + pr.saved.toFixed(0) : '—'}</td>
+      <td>\${pr.inSync ? '<span class="sync-ok">in sync</span>' : '<span class="sync-no">differs</span>'}</td>
+      <td><button class="apply-one" data-root="\${esc(pr.root)}">Apply template</button></td>
+    </tr>\`).join('');
+  $('template-info').textContent = ov.templateExists
+    ? \`Base template: \${ov.templatePath}\`
+    : 'No base template saved yet — edit a config below and click "Save as base template".';
+  document.querySelectorAll('#projects-table tr[data-root]').forEach((row) =>
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      currentRoot = row.dataset.root;
+      load();
+      loadTraces();
+      loadOverview();
+    }));
+  document.querySelectorAll('.apply-one').forEach((btn) =>
+    btn.addEventListener('click', async (e) => {
+      const res = await fetch('/api/apply-template', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ root: e.target.dataset.root }),
+      });
+      setStatus(res.ok ? 'Template applied' : (await res.json()).error, !res.ok);
+      loadOverview();
+      if (e.target.dataset.root === currentRoot) load();
+    }));
+}
+
+$('apply-all').addEventListener('click', async () => {
+  const res = await fetch('/api/apply-template', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ all: true }),
+  });
+  const body = await res.json();
+  setStatus(res.ok ? \`Template applied to \${body.applied} project\${body.applied === 1 ? '' : 's'}\` : body.error, !res.ok);
+  loadOverview();
+  load();
+});
+
 async function load() {
-  state = await (await fetch('/api/state')).json();
-  $('paths').innerHTML = \`Repo: <code>\${esc(state.repoRoot)}</code> · Config: <code>\${esc(state.configPath)}</code>\` +
+  state = await (await fetch('/api/state' + rootQ())).json();
+  currentRoot = state.repoRoot;
+  $('paths').innerHTML = \`Editing: <code>\${esc(state.repoRoot)}</code> · Config: <code>\${esc(state.configPath)}</code>\` +
     (state.configExists ? '' : ' <b>(will be created on save)</b>');
   $('datalists').innerHTML = Object.entries(state.options).map(([type, o]) =>
     \`<datalist id="dl-\${type}">\${o.models.map((m) => \`<option value="\${esc(m)}">\`).join('')}</datalist>\`
@@ -774,16 +894,18 @@ function renderTrace(trace) {
     el.addEventListener('mouseleave', () => { $('tip').hidden = true; }));
 }
 
+const TRACES_CARD_HTML = document.getElementById('traces-card').innerHTML;
 async function loadTraces() {
-  traceData = await (await fetch('/api/traces')).json();
-  const sel = $('trace-select');
+  traceData = await (await fetch('/api/traces' + rootQ())).json();
   if (!traceData.traces.length) {
-    $('traces-card').innerHTML = '<p class="sub">No Atlas sessions found for this repo yet — run /atlas here first.</p>';
+    $('traces-card').innerHTML = '<p class="sub">No Atlas sessions found for this project yet — run /atlas there first.</p>';
     return;
   }
+  if (!document.getElementById('trace-select')) $('traces-card').innerHTML = TRACES_CARD_HTML;
+  const sel = $('trace-select');
   sel.innerHTML = traceData.traces.map((t, i) =>
     \`<option value="\${i}">\${new Date(t.start).toLocaleString()} — \${esc(t.label || t.id.slice(0, 8))}</option>\`).join('');
-  sel.addEventListener('change', () => renderTrace(traceData.traces[Number(sel.value)]));
+  sel.onchange = () => renderTrace(traceData.traces[Number(sel.value)]);
   renderTrace(traceData.traces[0]);
 }
 loadTraces();
@@ -794,55 +916,120 @@ $('add-override').addEventListener('click', async () => {
   renderOverrides(list);
 });
 
-$('save').addEventListener('click', async () => {
+async function currentConfig() {
   const config = {
     planner: $('planner').value,
     defaultWorker: { type: $('dw-type').value, model: $('dw-model').value },
     overrides: await collectOverrides(),
   };
   if ($('dw-effort').value.trim()) config.defaultWorker.effort = $('dw-effort').value.trim();
+  return config;
+}
+
+$('save').addEventListener('click', async () => {
   const res = await fetch('/api/config', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(config),
+    body: JSON.stringify({ root: currentRoot, config: await currentConfig() }),
   });
   const body = await res.json();
   setStatus(res.ok ? 'Config saved' : body.error, !res.ok);
-  if (res.ok) load();
+  if (res.ok) { load(); loadOverview(); }
 });
 
-load();
+$('save-template').addEventListener('click', async () => {
+  const res = await fetch('/api/template', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config: await currentConfig() }),
+  });
+  const body = await res.json();
+  setStatus(res.ok ? 'Saved as base template' : body.error, !res.ok);
+  if (res.ok) loadOverview();
+});
+
+load().then(loadOverview);
 </script>
 </body>
 </html>`;
 
+function overviewRows() {
+  const template = readTemplate();
+  const tmplStr = JSON.stringify(template);
+  return discoverProjects().map((root) => {
+    const config = readConfig(root);
+    const traces = getTraces(root);
+    let billed = 0;
+    let saved = 0;
+    for (const t of traces) {
+      billed += t.totalCost;
+      saved += t.savings.mode === 'exact' ? t.savings.est : (t.savings.low + t.savings.high) / 2;
+    }
+    return {
+      root,
+      name: path.basename(root),
+      configExists: config !== null,
+      inSync: config !== null && JSON.stringify(config) === tmplStr,
+      traceCount: traces.length,
+      lastRun: traces[0]?.start ?? null,
+      billed,
+      saved,
+    };
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   try {
-    if (req.method === 'GET' && req.url === '/') {
+    const url = new URL(req.url, 'http://localhost');
+    const p = url.pathname;
+    const projects = discoverProjects();
+    const rootParam = url.searchParams.get('root');
+    const root = rootParam && projects.includes(rootParam) ? rootParam : repoRoot;
+
+    if (req.method === 'GET' && p === '/') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(PAGE);
     }
-    if (req.method === 'GET' && req.url === '/api/traces') {
-      return json(res, 200, { lanes: LANES, traces: getTraces() });
+    if (req.method === 'GET' && p === '/api/traces') {
+      return json(res, 200, { lanes: LANES, traces: getTraces(root) });
     }
-    if (req.method === 'GET' && req.url === '/api/state') {
-      const config = readConfig();
+    if (req.method === 'GET' && p === '/api/overview') {
+      return json(res, 200, { projects: overviewRows(), templatePath: TEMPLATE_PATH, templateExists: templateExists() });
+    }
+    if (req.method === 'GET' && p === '/api/state') {
+      const config = readConfig(root);
       return json(res, 200, {
-        repoRoot,
-        configPath,
+        repoRoot: root,
+        projects,
+        configPath: configPathFor(root),
         configExists: config !== null,
-        config: config ?? DEFAULT_CONFIG,
+        config: config ?? readTemplate(),
         agents: readAgents(),
         options: getOptions(),
       });
     }
-    if (req.method === 'POST' && req.url === '/api/config') {
-      const config = JSON.parse(await readBody(req));
-      const err = validateConfig(config);
+    if (req.method === 'POST' && p === '/api/config') {
+      const body = JSON.parse(await readBody(req));
+      const target = body.root && projects.includes(body.root) ? body.root : root;
+      const err = validateConfig(body.config ?? body);
       if (err) return json(res, 400, { error: err });
-      writeConfig(config);
+      writeConfig(target, body.config ?? body);
       return json(res, 200, { ok: true });
     }
-    if (req.method === 'POST' && req.url === '/api/agent-model') {
+    if (req.method === 'POST' && p === '/api/template') {
+      const { config } = JSON.parse(await readBody(req));
+      const err = validateConfig(config);
+      if (err) return json(res, 400, { error: err });
+      writeTemplate(config);
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'POST' && p === '/api/apply-template') {
+      const body = JSON.parse(await readBody(req));
+      const template = readTemplate();
+      const targets = body.all ? projects : projects.includes(body.root) ? [body.root] : [];
+      if (!targets.length) return json(res, 400, { error: 'unknown project root' });
+      for (const t of targets) writeConfig(t, template);
+      return json(res, 200, { ok: true, applied: targets.length });
+    }
+    if (req.method === 'POST' && p === '/api/agent-model') {
       const { name, model } = JSON.parse(await readBody(req));
       setAgentModel(name, model);
       return json(res, 200, { ok: true });
@@ -855,6 +1042,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Atlas dashboard → http://127.0.0.1:${PORT}`);
-  console.log(`  repo:   ${repoRoot}`);
-  console.log(`  config: ${configPath}${fs.existsSync(configPath) ? '' : ' (not created yet)'}`);
+  console.log(`  projects: ${discoverProjects().map((r) => path.basename(r)).join(', ')}`);
+  console.log(`  template: ${TEMPLATE_PATH}${templateExists() ? '' : ' (not created yet)'}`);
 });

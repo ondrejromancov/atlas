@@ -75,10 +75,16 @@ node dashboard.mjs [path-to-repo]     # defaults to the current directory
 # → http://127.0.0.1:4777
 ```
 
-It edits the repo's `.atlas/config.json` (planner, default worker, overrides) and the pinned `model:`
-lines of the installed `~/.claude/agents/atlas-*.md` files. Model dropdowns are populated live from
-`agy models` and `lms ls` where those CLIs can enumerate; curated lists elsewhere. Zero dependencies,
-localhost only.
+The **Projects** overview lists every sibling repo with an Atlas config — trace count, last run, total
+billed, total saved, and whether its config matches your **base template**
+(`~/.claude/atlas/config.json`). Click a project to edit its config and browse its traces; "Save as
+base template" captures the current config as the template, and "Apply template" (per project or to
+all) keeps repo configs in sync. `/atlas` bootstraps new repos from the template when one exists.
+
+The config editor edits the selected repo's `.atlas/config.json` (planner, default worker, overrides)
+and the pinned `model:` lines of the installed `~/.claude/agents/atlas-*.md` files. Model dropdowns are
+populated live from `agy models` and `lms ls` where those CLIs can enumerate; curated lists elsewhere.
+Zero dependencies, localhost only.
 
 The **Traces** section shows, per Atlas run, a per-model activity timeline and a token/cost breakdown.
 Claude usage comes from the repo's Claude Code transcripts; the other models come from their own CLIs'

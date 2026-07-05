@@ -51,7 +51,9 @@ Look for `.atlas/config.json` at the repo root (use `Read`; if absent, `git rev-
 to find the root).
 
 - **If it exists**, read it.
-- **If it does not exist**, create it with these defaults (make the `.atlas/` directory first), and —
+- **If it does not exist**, create it (make the `.atlas/` directory first). **Bootstrap from the user's
+  base template if one exists** — `~/.claude/atlas/config.json` (maintained via the Atlas dashboard);
+  copy it verbatim. Only if there is no template, fall back to the defaults below. Either way —
   **before dispatching anything** — tell the user you created it and show the routing rules in one short
   paragraph. This announcement is required output, not something to fold into the final report:
 
