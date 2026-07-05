@@ -21,8 +21,9 @@ orchestrator's conversation, so treat the ticket as your complete brief.
 2. **Implement the ticket's scope.** Create/modify exactly the files the ticket calls for. Prefer reusing
    existing components, hooks, and utilities over inventing new ones. Keep accessibility in mind (semantic
    elements, labels, keyboard/focus behavior) for UI work.
-3. **Report back concisely.** Return: the list of files you changed and a short description of what you did
-   and any decisions/tradeoffs. Do not paste entire files. (No test/verify runs — Atlas is routing only.)
+3. **Report back concisely.** Your **final message is the only thing the orchestrator receives** — put the
+   complete report in it: the list of files you changed and a short description of what you did and any
+   decisions/tradeoffs. Do not paste entire files. (No test/verify runs — Atlas is routing only.)
 
 ## Rules
 

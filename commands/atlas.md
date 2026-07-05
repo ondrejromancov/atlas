@@ -30,8 +30,9 @@ Look for `.atlas/config.json` at the repo root (use `Read`; if absent, `git rev-
 to find the root).
 
 - **If it exists**, read it.
-- **If it does not exist**, create it with these defaults (make the `.atlas/` directory first), tell the
-  user you created it, and show them the routing rules so they know how to customize:
+- **If it does not exist**, create it with these defaults (make the `.atlas/` directory first), and —
+  **before dispatching anything** — tell the user you created it and show the routing rules in one short
+  paragraph. This announcement is required output, not something to fold into the final report:
 
 ```json
 {
@@ -68,8 +69,11 @@ Decide which worker gets the task:
 3. If a task spans both (e.g. "add an API endpoint **and** a React page for it"), prefer to **split** it:
    route the backend part to the default worker and the frontend part to the Claude worker, as two
    separate delegations. If splitting is awkward, pick the worker for the dominant part and say so.
+4. For a large task with several independent parts, split it into multiple tickets even when they route
+   to the same worker — smaller disjoint tickets parallelize better (see step 6).
 
-State your decision to the user in one line before delegating, e.g.:
+**Required output** — state your decision to the user in one line *before* delegating (do not skip this
+or defer it to the final report), e.g.:
 > Routing to **atlas-claude-worker (Opus 4.8)** — this is frontend/UI work.
 or
 > Routing to **atlas-gpt-worker (GPT-5.5)** — general backend work, no override matched.
@@ -81,7 +85,9 @@ Worker subagents do **not** see this conversation. Everything they need must be 
 - **Goal** — one or two sentences.
 - **Context** — repo root path, relevant existing files/paths, conventions to follow (point them at
   `AGENTS.md` / `CLAUDE.md` / `README` if present).
-- **Scope** — the specific files to create/modify and what each should do.
+- **Scope** — the specific files to create/modify and what each should do. When multiple workers will run
+  concurrently, give each ticket an explicit file-ownership list ("Your ONLY files: …") with **no overlap**
+  between tickets.
 - **Done-when** — concrete acceptance criteria.
 
 For the **GPT worker**, also include, taken from config: the Codex **model** (`defaultWorker.model`) and
@@ -94,7 +100,14 @@ Dispatch the chosen worker subagent (via the Task tool), passing the ticket as i
 - Frontend/override match → use the **`atlas-claude-worker`** subagent.
 - Otherwise → use the **`atlas-gpt-worker`** subagent.
 
-If you split the task in step 4, delegate each part to its worker.
+If you split the task in step 4, delegate the parts **in parallel** when their file sets are disjoint —
+dispatch all workers in one message. Delegate sequentially only when the parts genuinely touch the same
+files.
+
+**Trust the diff, not the status.** A worker can report progress while its underlying process is hung.
+If workers run long, check `git status --porcelain` for real file changes. If the GPT worker comes back
+with zero file changes (or its report never arrives), redispatch that ticket once; if Codex fails again,
+send the ticket to `atlas-claude-worker` instead — delivery beats routing purity.
 
 ## 7. Report back
 
@@ -102,6 +115,9 @@ When the worker returns:
 
 1. Run `git diff --stat` (and `git status`) to see what actually changed.
 2. Give the user a concise summary: which worker ran, what files changed, and the worker's own report.
+
+Treat the worker's report as advisory — the diff is the ground truth. If a report is missing or garbled,
+reconstruct what happened from the diff rather than guessing.
 
 That's it — Atlas is routing only. No verification, review, or fix loops. Base your summary on the real
 diff, then stop.
