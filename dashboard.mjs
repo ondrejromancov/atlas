@@ -135,7 +135,7 @@ function getOptions() {
   } catch {}
   const value = {
     codex: { models: ['gpt-5.5'], efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'], live: false },
-    claude: { models: ['claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'opus', 'sonnet', 'haiku'], live: false },
+    claude: { models: ['claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'opus', 'sonnet', 'haiku'], live: false },
     gemini: { models: agy, live: agy.length > 0 },
     local: { models: lmstudio, live: lmstudio.length > 0 },
   };
@@ -614,15 +614,15 @@ const PAGE = `<!doctype html>
     <p class="sub">The brain. Plans, routes, and writes tickets — used as seldom as possible. This is
     your Claude Code session model (informational; set it with <code>/model</code>).</p>
     <label>Model</label>
-    <input id="planner">
+    <select id="planner"></select>
   </div>
 
   <h2>Default worker <span class="role">the workhorse — all code unless an override matches</span></h2>
   <div class="card">
     <div class="row">
       <div><label>Type</label><select id="dw-type"></select></div>
-      <div><label>Model</label><input id="dw-model"></div>
-      <div><label>Effort</label><input id="dw-effort" placeholder="e.g. xhigh"></div>
+      <div><label>Model</label><select id="dw-model"></select></div>
+      <div><label>Effort</label><select id="dw-effort"></select></div>
     </div>
   </div>
 
@@ -652,7 +652,6 @@ const PAGE = `<!doctype html>
     <button id="save-template">Save as base template</button>
     <span id="status"></span>
   </div>
-  <div id="datalists"></div>
   <div id="tip" hidden></div>
 </main>
 <script>
@@ -665,6 +664,21 @@ const esc = (s) => s.replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt
 function setStatus(msg, isErr) {
   $('status').textContent = msg;
   $('status').className = isErr ? 'err' : '';
+}
+
+function optionsFor(type) { return state?.options?.[type]?.models ?? []; }
+
+function modelOptionsHtml(type, value) {
+  const models = optionsFor(type).slice();
+  if (value && !models.includes(value)) models.unshift(value);
+  return models.map((m) =>
+    \`<option value="\${esc(m)}"\${m === value ? ' selected' : ''}>\${esc(m)}</option>\`).join('');
+}
+
+function rebuildModelSelect(sel, type) {
+  const models = optionsFor(type);
+  const keep = models.includes(sel.value) ? sel.value : models[0] ?? '';
+  sel.innerHTML = modelOptionsHtml(type, keep);
 }
 
 function modelHint(type) {
@@ -683,7 +697,7 @@ function renderOverrides(overrides) {
           <select class="ov-worker">\${WORKER_TYPES.map((t) =>
             \`<option \${t === o.worker ? 'selected' : ''}>\${t}</option>\`).join('')}</select></div>
         <div><label>Model <span class="hint">(\${modelHint(o.worker)})</span></label>
-          <input class="ov-model" list="dl-\${o.worker}" value="\${esc(o.model)}"></div>
+          <select class="ov-model">\${modelOptionsHtml(o.worker, o.model)}</select></div>
         <div style="flex:0;align-self:flex-end"><button class="ghost ov-remove">Remove</button></div>
       </div>
     </div>\`).join('');
@@ -695,7 +709,7 @@ function renderOverrides(overrides) {
   document.querySelectorAll('.ov-worker').forEach((sel) =>
     sel.addEventListener('change', (e) => {
       const card = e.target.closest('[data-i]');
-      card.querySelector('.ov-model').setAttribute('list', 'dl-' + e.target.value);
+      rebuildModelSelect(card.querySelector('.ov-model'), e.target.value);
       card.querySelector('.hint').textContent = '(' + modelHint(e.target.value) + ')';
     }));
 }
@@ -732,7 +746,7 @@ function renderAgents(agents) {
       <span class="name">\${a.name}</span>
       <span class="brain">\${workerBrain(a.name)}</span>
       <span class="wlabel">\${a.name === 'atlas-claude-worker' ? 'model' : 'wrapper'}</span>
-      <input class="ag-model" list="dl-claude" value="\${esc(a.model ?? '')}">
+      <select class="ag-model">\${modelOptionsHtml('claude', a.model ?? '')}</select>
       <button class="ag-save">Save</button>
     </div>\` : \`
     <div class="agent" style="margin:8px 0">
@@ -807,20 +821,17 @@ async function load() {
   currentRoot = state.repoRoot;
   $('paths').innerHTML = \`Editing: <code>\${esc(state.repoRoot)}</code> · Config: <code>\${esc(state.configPath)}</code>\` +
     (state.configExists ? '' : ' <b>(will be created on save)</b>');
-  $('datalists').innerHTML = Object.entries(state.options).map(([type, o]) =>
-    \`<datalist id="dl-\${type}">\${o.models.map((m) => \`<option value="\${esc(m)}">\`).join('')}</datalist>\`
-  ).join('') + \`<datalist id="dl-effort">\${state.options.codex.efforts.map((e) =>
-    \`<option value="\${e}">\`).join('')}</datalist>\`;
   const c = state.config;
-  $('planner').value = c.planner;
+  $('planner').innerHTML = modelOptionsHtml('claude', c.planner);
   $('dw-type').innerHTML = WORKER_TYPES.map((t) =>
     \`<option \${t === c.defaultWorker.type ? 'selected' : ''}>\${t}</option>\`).join('');
-  $('dw-model').value = c.defaultWorker.model;
-  $('dw-model').setAttribute('list', 'dl-' + c.defaultWorker.type);
-  $('dw-type').addEventListener('change', () =>
-    $('dw-model').setAttribute('list', 'dl-' + $('dw-type').value));
-  $('dw-effort').value = c.defaultWorker.effort ?? '';
-  $('dw-effort').setAttribute('list', 'dl-effort');
+  $('dw-model').innerHTML = modelOptionsHtml(c.defaultWorker.type, c.defaultWorker.model);
+  $('dw-type').onchange = () => rebuildModelSelect($('dw-model'), $('dw-type').value);
+  const eff = c.defaultWorker.effort ?? '';
+  const efforts = state.options.codex.efforts.slice();
+  if (eff && !efforts.includes(eff)) efforts.unshift(eff);
+  $('dw-effort').innerHTML = \`<option value=""\${eff ? '' : ' selected'}>(default)</option>\` +
+    efforts.map((x) => \`<option value="\${x}"\${x === eff ? ' selected' : ''}>\${x}</option>\`).join('');
   renderOverrides(c.overrides);
   renderAgents(state.agents);
 }
