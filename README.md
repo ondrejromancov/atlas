@@ -12,6 +12,7 @@ expensive planner is used as seldom as possible.
 | **Workhorse** | GPT-5.5 via Codex CLI | `atlas-gpt-worker` | All implementation by default: backend, infra, scripts, frontend *logic*. Efficient code, weak visuals. |
 | **UI hand** | Claude Opus 4.8 | `atlas-claude-worker` | Visual UI only: layout, styling, design polish, animation implementation, accessibility. |
 | **Explorer** | Gemini 3.1 Pro via agy CLI | `atlas-gemini-worker` | Occasional throwaway HTML explorations in `.atlas/explorations/` — divergent concepts, style directions, animation experiments. Winning direction is then implemented by the UI hand / workhorse. |
+| **Private hand** | Local model (e.g. Gemma 4) via LM Studio, driven by `codex exec --oss` | `atlas-local-worker` | Opt-in only: offline/private tickets where code must stay on-machine, or quota-free handling of small well-scoped tasks. |
 
 ## Why standalone (not a plugin)
 
@@ -36,6 +37,7 @@ commands/atlas.md               → ~/.claude/commands/atlas.md              # t
 agents/atlas-gpt-worker.md      → ~/.claude/agents/atlas-gpt-worker.md     # workhorse → codex exec (GPT-5.5)
 agents/atlas-claude-worker.md   → ~/.claude/agents/atlas-claude-worker.md  # UI worker → Opus 4.8
 agents/atlas-gemini-worker.md   → ~/.claude/agents/atlas-gemini-worker.md  # explorer → agy (Gemini 3.1 Pro)
+agents/atlas-local-worker.md    → ~/.claude/agents/atlas-local-worker.md   # private hand → codex --oss (LM Studio)
 dashboard.mjs                   # config dashboard (run from anywhere, no install)
 <repo>/.atlas/config.json       # per-repo routing config (auto-created on first /atlas run)
 ```
@@ -46,6 +48,10 @@ Worker CLIs:
   `codex login`. Requires a ChatGPT subscription.
 - **agy** (optional, only for explorations): install the agy CLI and check `agy models` lists
   "Gemini 3.1 Pro".
+- **LM Studio** (optional, only for the local worker): download a model (e.g.
+  `google/gemma-4-26b-a4b-qat`), and make sure the `lms` CLI works. The worker starts the server and
+  loads the model itself — with a 32k context window, since LM Studio's default is too small for
+  Codex's prompts. (Ollama also works via `--local-provider ollama`, but Codex requires Ollama ≥ 0.13.4.)
 
 ## Usage
 
@@ -55,6 +61,7 @@ Worker CLIs:
    /atlas add an endpoint that returns the current user            # → GPT-5.5 workhorse
    /atlas polish the settings page — spacing, dark mode, motion    # → Opus 4.8 UI worker
    /atlas show me 3 wild directions for the onboarding screen      # → Gemini explorations
+   /atlas locally, without cloud: add a slugify helper + tests     # → local Gemma 4 via LM Studio
    ```
 
 On first run in a repo, Atlas creates `.atlas/config.json`. Edit it directly — or use the dashboard.
@@ -87,6 +94,11 @@ lines of the installed `~/.claude/agents/atlas-*.md` files. Zero dependencies, l
       "when": "creative UI exploration — divergent concepts, style directions, animation experiments before committing. Output is throwaway HTML in .atlas/explorations/, never app code.",
       "worker": "gemini",
       "model": "Gemini 3.1 Pro (High)"
+    },
+    {
+      "when": "the user explicitly asks for a local / offline / private model, wants code kept on-machine, or wants to spare cloud quota on a small well-scoped ticket",
+      "worker": "local",
+      "model": "google/gemma-4-26b-a4b-qat"
     }
   ]
 }

@@ -1,6 +1,6 @@
 ---
 name: atlas
-description: Plan a task as the orchestrator, then delegate to the right worker model — GPT-5.5 via Codex as the workhorse, Claude Opus 4.8 for visual UI, Gemini 3.1 Pro (agy) for throwaway UI explorations.
+description: Plan a task as the orchestrator, then delegate to the right worker model — GPT-5.5 via Codex as the workhorse, Claude Opus 4.8 for visual UI, Gemini 3.1 Pro (agy) for throwaway UI explorations, a local LM Studio model for private/offline tickets.
 argument-hint: "<what to build or change>"
 allowed-tools: Read, Write, Bash, Glob, Grep, Task, AskUserQuestion
 ---
@@ -26,6 +26,11 @@ back.
   creative divergence. Used occasionally, for **throwaway UI explorations**: HTML mockups, style
   directions, animation experiments in `.atlas/explorations/` — never app code. The winning direction is
   then implemented by the Claude UI worker (or Codex for the logic).
+- **Local model via LM Studio (`atlas-local-worker`)** — the private hand. A local model (e.g. Gemma 4)
+  driven by the same Codex harness (`codex exec --oss`), fully offline: code never leaves the machine.
+  Routed **only when the user explicitly asks** for local/offline/private handling, or wants to spare
+  cloud quota on a small, well-scoped ticket. Capability is modest — keep local tickets small and
+  concrete (single file, clear spec); reroute to a cloud worker if it fails.
 
 The task to orchestrate:
 
@@ -63,6 +68,11 @@ to find the root).
       "when": "creative UI exploration — the user wants divergent concepts, style directions, animation experiments, or 'show me what's possible' before committing. Output is throwaway HTML in .atlas/explorations/, never app code.",
       "worker": "gemini",
       "model": "Gemini 3.1 Pro (High)"
+    },
+    {
+      "when": "the user explicitly asks for a local / offline / private model, wants code kept on-machine, or wants to spare cloud quota on a small well-scoped ticket",
+      "worker": "local",
+      "model": "google/gemma-4-26b-a4b-qat"
     }
   ]
 }
@@ -70,8 +80,9 @@ to find the root).
 
 The config means:
 - `defaultWorker` — the worker used for everything that does **not** match an override (GPT-5.5 via Codex).
-- `overrides[]` — each entry is `{ when: <natural-language description>, worker: "claude"|"codex"|"gemini", model }`.
-  You match the task against each `when` by judgment.
+- `overrides[]` — each entry is `{ when: <natural-language description>, worker: "claude"|"codex"|"gemini"|"local", model }`.
+  You match the task against each `when` by judgment. The `local` override never matches implicitly —
+  only when the user's own words ask for local/offline/private handling.
 
 If an existing config predates the gemini override, leave it as the user configured it — do not silently
 add overrides to an existing file.
@@ -130,6 +141,7 @@ Dispatch the chosen worker subagent (via the Task tool), passing the ticket as i
 
 - Visual-UI override match → use the **`atlas-claude-worker`** subagent.
 - Creative-exploration override match → use the **`atlas-gemini-worker`** subagent.
+- Local/offline/private override match → use the **`atlas-local-worker`** subagent.
 - Otherwise → use the **`atlas-gpt-worker`** subagent (the default for all implementation).
 
 If you split the task in step 4, delegate the parts **in parallel** when their file sets are disjoint —

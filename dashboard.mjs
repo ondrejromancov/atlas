@@ -17,8 +17,8 @@ const configPath = path.join(repoRoot, '.atlas', 'config.json');
 const agentsDir = path.join(os.homedir(), '.claude', 'agents');
 const PORT = Number(process.env.ATLAS_DASHBOARD_PORT ?? 4777);
 
-const AGENT_NAMES = ['atlas-gpt-worker', 'atlas-claude-worker', 'atlas-gemini-worker'];
-const WORKER_TYPES = ['codex', 'claude', 'gemini'];
+const AGENT_NAMES = ['atlas-gpt-worker', 'atlas-claude-worker', 'atlas-gemini-worker', 'atlas-local-worker'];
+const WORKER_TYPES = ['codex', 'claude', 'gemini', 'local'];
 
 const DEFAULT_CONFIG = {
   planner: 'claude-fable-5',
