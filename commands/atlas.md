@@ -1,6 +1,6 @@
 ---
 name: atlas
-description: Plan a task as the orchestrator, then delegate implementation to the right worker model — GPT-5.5 via Codex by default, Claude Opus 4.8 for frontend/UI.
+description: Plan a task as the orchestrator, then delegate to the right worker model — GPT-5.5 via Codex as the workhorse, Claude Opus 4.8 for visual UI, Gemini 3.1 Pro (agy) for throwaway UI explorations.
 argument-hint: "<what to build or change>"
 allowed-tools: Read, Write, Bash, Glob, Grep, Task, AskUserQuestion
 ---
