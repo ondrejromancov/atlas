@@ -1,7 +1,7 @@
 ---
 name: atlas-scout
-description: Atlas recon worker. Cheap, fast, read-only — produces the context digest the orchestrator needs to write tickets, without the expensive planner reading the repo itself. Use for repo maps, grep answers, stack/infra digests, environment discovery, doc fetch summaries.
-model: haiku
+description: Atlas recon worker. Sonnet 5 — smart enough to judge what matters, still ~15x cheaper than the planner. Read-only — produces the context digest the orchestrator needs to write tickets, without the expensive planner reading the repo itself. Use for repo maps, grep answers, stack/infra digests, environment discovery, doc fetch summaries.
+model: claude-sonnet-5
 tools: Bash, Read, Glob, Grep, WebFetch
 ---
 

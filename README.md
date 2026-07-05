@@ -13,7 +13,7 @@ expensive planner is used as seldom as possible.
 | **UI hand** | Claude Opus 4.8 | `atlas-claude-worker` | Visual UI only: layout, styling, design polish, animation implementation, accessibility. |
 | **Explorer** | Gemini 3.1 Pro via agy CLI | `atlas-gemini-worker` | Occasional throwaway HTML explorations in `.atlas/explorations/` — divergent concepts, style directions, animation experiments. Winning direction is then implemented by the UI hand / workhorse. |
 | **Private hand** | Local model (e.g. Gemma 4) via LM Studio, driven by `codex exec --oss` | `atlas-local-worker` | Opt-in only: offline/private work where code must stay on-machine, or quota-free execution. Receives narrow single-function/single-file **subtasks**, never full tickets. |
-| **Scout** | Claude Haiku | `atlas-scout` | Read-only recon that fuels tickets: repo maps, grep answers, infra digests, env discovery. The planner never reads the repo itself — its cache-read cost per turn exceeds an entire scout run. |
+| **Scout** | Claude Sonnet 5 | `atlas-scout` | Read-only recon that fuels tickets: repo maps, grep answers, infra digests, env discovery. The planner never reads the repo itself — its cache-read cost per turn exceeds an entire scout run. |
 | **Verifier** | Claude Haiku | `atlas-verifier` | Acceptance batteries (typecheck/build/tests/probes/diff-scope) and long waits (CI watch, release smoke tests). Returns `VERDICT: PASS/FAIL`; the planner reads verdicts instead of re-running checks. |
 
 ## Why standalone (not a plugin)
@@ -139,7 +139,7 @@ Haiku worker session. Atlas sessions cost 5–10× less. Hence:
 - **Delegation-first**: anything beyond a one-line fix is a ticket; an approved plan/task list IS the
   ticket board — dispatch it, don't execute item 1 yourself. (Also installed as a default posture in
   the user-level CLAUDE.md so non-/atlas sessions don't regress to solo.)
-- **Scouts, not self-reads**: tickets are fueled by parallel `atlas-scout` digests.
+- **Scouts, not self-reads**: tickets are fueled by parallel `atlas-scout` digests (Sonnet 5 — recon quality matters, and it is still ~15x cheaper than planner turns; only the mechanical verifier stays on Haiku).
 - **Rolling dispatch**: batch a wave's spawns in one message; refill from the ready-queue the moment any
   worker finishes; worktrees instead of serializing on file overlap; never end the turn with tickets
   pending (observed: avg 1.6 concurrent workers when 6 were possible, plus user-nudge stalls).
