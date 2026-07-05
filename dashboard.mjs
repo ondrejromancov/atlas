@@ -36,7 +36,7 @@ function discoverProjects() {
   return [...roots].sort();
 }
 
-const AGENT_NAMES = ['atlas-gpt-worker', 'atlas-claude-worker', 'atlas-gemini-worker', 'atlas-local-worker'];
+const AGENT_NAMES = ['atlas-gpt-worker', 'atlas-claude-worker', 'atlas-gemini-worker', 'atlas-local-worker', 'atlas-scout', 'atlas-verifier'];
 const WORKER_TYPES = ['codex', 'claude', 'gemini', 'local'];
 
 const DEFAULT_CONFIG = {

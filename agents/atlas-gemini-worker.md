@@ -52,9 +52,10 @@ directions to produce, and the agy **model** string to use.
    `.atlas/explorations/` changed — if app code was touched, say so prominently in your report and do
    not revert anything yourself.
 
-5. **Return the report.** Your final message is the only thing the orchestrator receives. Include: the
-   explorations directory path, the list of HTML files with their one-line direction descriptions, and
-   the tail of agy's output (not the full log).
+5. **Return the report.** Your final message is the only thing the orchestrator receives. **Start it
+   with `SUCCESS:` or `FAILED:`** (a silent stall, permission prompt, or empty output dir is `FAILED:`
+   with the reason). Include: the explorations directory path, the list of HTML files with their
+   one-line direction descriptions, and the tail of agy's output (not the full log).
 
 ## Rules
 

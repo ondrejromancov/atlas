@@ -22,8 +22,10 @@ orchestrator's conversation, so treat the ticket as your complete brief.
    existing components, hooks, and utilities over inventing new ones. Keep accessibility in mind (semantic
    elements, labels, keyboard/focus behavior) for UI work.
 3. **Report back concisely.** Your **final message is the only thing the orchestrator receives** — put the
-   complete report in it: the list of files you changed and a short description of what you did and any
-   decisions/tradeoffs. Do not paste entire files. (No test/verify runs — Atlas is routing only.)
+   complete report in it, **starting with `SUCCESS:` or `FAILED:`**, then the list of files you changed
+   and a short description of what you did and any decisions/tradeoffs. Do not paste entire files.
+   Run the verification the ticket's done-when names (e.g. browser check against the dev server for UI
+   work) and state the result.
 
 ## Rules
 

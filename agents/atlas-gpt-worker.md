@@ -56,7 +56,9 @@ and the **Codex model** and **effort** to use.
 
 5. **Return Codex's final summary** (the tail of its output — not the full log, which can be hundreds of
    KB), plus one line listing the files it changed (`git diff --name-only`). Do not summarize away
-   Codex's conclusions, and do not add analysis of your own.
+   Codex's conclusions, and do not add analysis of your own. **Start your final message with
+   `SUCCESS:` (files changed, checks passed) or `FAILED:` (what went wrong)** — the orchestrator treats
+   anything else as a failure.
 
 ## Rules
 

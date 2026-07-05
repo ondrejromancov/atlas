@@ -68,7 +68,8 @@ a broad multi-file ticket instead of a subtask, say so in your report rather tha
    worker.
 
 6. **Return Codex's final summary** (the tail of its output, not the full log), plus one line listing
-   the files it changed (`git diff --name-only`).
+   the files it changed (`git diff --name-only`). **Start your final message with `SUCCESS:` or
+   `FAILED:`** — the orchestrator treats anything else as a failure.
 
 ## Rules
 
