@@ -117,7 +117,95 @@ const LANES = [
   { key: 'opus', label: 'Claude Opus' },
   { key: 'sonnet', label: 'Claude Sonnet' },
   { key: 'haiku', label: 'Haiku (wrappers)' },
+  { key: 'gemini', label: 'Gemini (agy)' },
+  { key: 'local', label: 'Local (LM Studio)' },
 ];
+
+// --- external CLI logs: authoritative usage for the non-Claude models -------
+
+// Codex rollouts: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl — per-turn
+// token_count events with timestamps; session_meta carries the cwd.
+function collectCodexEvents(startMs, endMs, events) {
+  const base = path.join(os.homedir(), '.codex', 'sessions');
+  const pad = Math.max(endMs - startMs, 120_000) * 0 + 120_000;
+  const seen = new Set();
+  for (let t = startMs - 86_400_000; t <= endMs + 86_400_000; t += 86_400_000) {
+    const d = new Date(t);
+    const dir = path.join(base, String(d.getUTCFullYear()),
+      String(d.getUTCMonth() + 1).padStart(2, '0'), String(d.getUTCDate()).padStart(2, '0'));
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    let files = [];
+    try { files = fs.readdirSync(dir); } catch { continue; }
+    for (const f of files) {
+      if (!f.endsWith('.jsonl')) continue;
+      let txt;
+      try { txt = fs.readFileSync(path.join(dir, f), 'utf8'); } catch { continue; }
+      if (!txt.includes('"cwd":"' + repoRoot + '"')) continue;
+      for (const line of txt.split('\n')) {
+        if (!line.includes('"token_count"')) continue;
+        let o;
+        try { o = JSON.parse(line); } catch { continue; }
+        const ts = Date.parse(o.timestamp ?? '');
+        if (!Number.isFinite(ts) || ts < startMs - pad || ts > endMs + pad) continue;
+        const u = o.payload?.info?.last_token_usage;
+        if (!u) continue;
+        events.push({
+          ts, lane: 'codex',
+          cxIn: Math.max((u.input_tokens || 0) - (u.cached_input_tokens || 0), 0),
+          cxCached: u.cached_input_tokens || 0,
+          cxOut: u.output_tokens || 0,
+        });
+      }
+    }
+  }
+}
+
+// agy history: ~/.gemini/antigravity-cli/history.jsonl — one line per turn
+// with workspace + ms timestamp. No token counts; activity markers only.
+function collectGeminiEvents(startMs, endMs, events) {
+  let txt;
+  try {
+    txt = fs.readFileSync(path.join(os.homedir(), '.gemini', 'antigravity-cli', 'history.jsonl'), 'utf8');
+  } catch { return; }
+  for (const line of txt.split('\n')) {
+    if (!line) continue;
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    if (o.workspace !== repoRoot) continue;
+    const ts = o.timestamp;
+    if (!Number.isFinite(ts) || ts < startMs - 120_000 || ts > endMs + 120_000) continue;
+    events.push({ ts, lane: 'gemini', marker: true });
+  }
+}
+
+// LM Studio server logs: ~/.lmstudio/server-logs/YYYY-MM/YYYY-MM-DD.N.log —
+// per-request lines with local-time timestamps + prompt token counts. Not
+// workspace-attributed; any local inference inside the window is shown.
+function collectLocalEvents(startMs, endMs, events) {
+  const base = path.join(os.homedir(), '.lmstudio', 'server-logs');
+  const seen = new Set();
+  for (let t = startMs; t <= endMs + 86_400_000; t += 86_400_000) {
+    const d = new Date(t);
+    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const mdir = path.join(base, day.slice(0, 7));
+    let files = [];
+    try { files = fs.readdirSync(mdir); } catch { continue; }
+    for (const f of files) {
+      if (!f.startsWith(day) || seen.has(f)) continue;
+      seen.add(f);
+      let txt;
+      try { txt = fs.readFileSync(path.join(mdir, f), 'utf8'); } catch { continue; }
+      for (const line of txt.split('\n')) {
+        const m = line.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\].*?cached_tokens=(\d+) uncached_tokens=(\d+)/);
+        if (!m) continue;
+        const ts = Date.parse(m[1].replace(' ', 'T'));
+        if (!Number.isFinite(ts) || ts < startMs - 120_000 || ts > endMs + 120_000) continue;
+        events.push({ ts, lane: 'local', lcTok: Number(m[2]) + Number(m[3]) });
+      }
+    }
+  }
+}
 
 function laneForModel(model) {
   for (const key of ['fable', 'opus', 'sonnet', 'haiku']) {
@@ -193,11 +281,24 @@ function buildTrace(id, label, events) {
   const dur = Math.max(end - start, 1);
   const byLane = {};
   for (const e of events) {
-    const l = (byLane[e.lane] ??= { ts: [], in: 0, out: 0, cr: 0, cw: 0, codexByFile: {} });
+    const l = (byLane[e.lane] ??= {
+      ts: [], in: 0, out: 0, cr: 0, cw: 0, codexByFile: {},
+      cxIn: 0, cxCached: 0, cxOut: 0, cx: false, lcTok: 0, markers: 0,
+    });
     l.ts.push(e.ts);
     if (e.codexTokens) {
-      // one codex run per worker transcript: keep the max cumulative figure per file
+      // scrape fallback: max cumulative "tokens used" figure per worker file
       l.codexByFile[e.fileKey] = Math.max(l.codexByFile[e.fileKey] ?? 0, e.codexTokens);
+    } else if (e.cxIn !== undefined) {
+      l.cx = true;
+      l.cxIn += e.cxIn;
+      l.cxCached += e.cxCached;
+      l.cxOut += e.cxOut;
+    } else if (e.marker) {
+      l.markers++;
+    } else if (e.lcTok !== undefined) {
+      l.lcTok += e.lcTok;
+      l.markers++;
     } else {
       l.in += e.in;
       l.out += e.out;
@@ -235,11 +336,30 @@ function buildTrace(id, label, events) {
         t1: s.t1,
         n: s.n,
       })),
-      tokens: { in: l.in, out: l.out, cacheRead: l.cr, cacheWrite: l.cw, codex },
+      tokens: {
+        in: l.in, out: l.out, cacheRead: l.cr, cacheWrite: l.cw, codex,
+        cx: l.cx, cxIn: l.cxIn, cxCached: l.cxCached, cxOut: l.cxOut,
+        lcTok: l.lcTok, markers: l.markers,
+      },
       cost,
     });
   }
-  const codexTokens = lanes.find((l) => l.key === 'codex')?.tokens.codex ?? 0;
+  // Savings: exact Fable-equivalent when Codex rollout breakdowns exist,
+  // otherwise a rate-range estimate from the scraped total.
+  const cx = lanes.find((l) => l.key === 'codex')?.tokens;
+  let savings;
+  if (cx?.cx) {
+    savings = {
+      mode: 'exact',
+      codexIn: cx.cxIn + cx.cxCached,
+      codexOut: cx.cxOut,
+      est: (cx.cxIn * 10 + cx.cxCached * 1 + cx.cxOut * 50) / 1e6,
+    };
+  } else {
+    const total = cx?.codex ?? 0;
+    savings = { mode: 'range', codexTokens: total, low: (total * 10) / 1e6, high: (total * 50) / 1e6 };
+  }
+  const lc = lanes.find((l) => l.key === 'local')?.tokens.lcTok ?? 0;
   return {
     id,
     label,
@@ -247,7 +367,8 @@ function buildTrace(id, label, events) {
     end,
     lanes,
     totalCost: lanes.reduce((a, l) => a + l.cost, 0),
-    savings: { codexTokens, low: (codexTokens * 10) / 1e6, high: (codexTokens * 50) / 1e6 },
+    savings,
+    localTokens: lc,
   };
 }
 
@@ -282,6 +403,15 @@ function getTraces() {
       }
     } catch {}
     if (!events.length) continue;
+    let s = Infinity;
+    let e = -Infinity;
+    for (const ev of events) {
+      if (ev.ts < s) s = ev.ts;
+      if (ev.ts > e) e = ev.ts;
+    }
+    collectCodexEvents(s, e, events);
+    collectGeminiEvents(s, e, events);
+    collectLocalEvents(s, e, events);
     traces.push(buildTrace(f.replace(/\.jsonl$/, ''), firstUserLabel(txt), events));
   }
   traces.sort((a, b) => b.start - a.start);
@@ -377,9 +507,11 @@ const PAGE = `<!doctype html>
   .hint { text-transform: none; letter-spacing: 0; font-weight: normal; opacity: .8; }
   /* Trace viz — validated categorical slots (dataviz reference palette) */
   :root { --viz-grid: #e1e0d9; --viz-axis: #c3c2b7; --viz-muted: #898781;
-    --s-fable: #2a78d6; --s-codex: #1baf7a; --s-opus: #eda100; --s-sonnet: #008300; --s-haiku: #4a3aa7; }
+    --s-fable: #2a78d6; --s-codex: #1baf7a; --s-opus: #eda100; --s-sonnet: #008300; --s-haiku: #4a3aa7;
+    --s-gemini: #e34948; --s-local: #e87ba4; }
   @media (prefers-color-scheme: dark) { :root { --viz-grid: #2c2c2a; --viz-axis: #383835;
-    --s-fable: #3987e5; --s-codex: #199e70; --s-opus: #c98500; --s-sonnet: #008300; --s-haiku: #9085e9; } }
+    --s-fable: #3987e5; --s-codex: #199e70; --s-opus: #c98500; --s-sonnet: #008300; --s-haiku: #9085e9;
+    --s-gemini: #e66767; --s-local: #d55181; } }
   .lane { display: grid; grid-template-columns: 150px 1fr; align-items: center; gap: 10px; margin: 8px 0; }
   .lane .lname { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
   .lane .swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
@@ -569,13 +701,21 @@ function renderTrace(trace) {
     \`<span>\${Math.round((trace.end - trace.start) / 60000)} min</span>\` +
     \`<span>\${fmtTime(trace.end)}</span>\`;
 
+  const cells = (l) => {
+    const t = l.tokens;
+    if (l.key === 'codex') {
+      return t.cx
+        ? [fmtTok(t.cxIn), fmtTok(t.cxOut), fmtTok(t.cxCached), '$0 (subscription)']
+        : [t.codex ? fmtTok(t.codex) + ' total' : '—', '—', '—', '$0 (subscription)'];
+    }
+    if (l.key === 'gemini') return [\`\${t.markers} turn\${t.markers === 1 ? '' : 's'}\`, '—', '—', '$0 (plan)'];
+    if (l.key === 'local') return [t.lcTok ? fmtTok(t.lcTok) + ' prompt' : \`\${t.markers} req\`, '—', '—', '$0 (local)'];
+    return [fmtTok(t.in + t.cacheRead + t.cacheWrite), fmtTok(t.out), fmtTok(t.cacheRead), fmtUsd(l.cost)];
+  };
   const rows = trace.lanes.map((l) => \`
     <tr>
       <td><span class="swatch" style="display:inline-block;background:var(--s-\${l.key});margin-right:6px;width:8px;height:8px;border-radius:2px"></span>\${esc(laneLabel(l.key))}</td>
-      <td>\${l.key === 'codex' ? fmtTok(l.tokens.codex) : fmtTok(l.tokens.in + l.tokens.cacheRead + l.tokens.cacheWrite)}</td>
-      <td>\${l.key === 'codex' ? '—' : fmtTok(l.tokens.out)}</td>
-      <td>\${l.key === 'codex' ? '—' : fmtTok(l.tokens.cacheRead)}</td>
-      <td>\${l.key === 'codex' ? '$0 (subscription)' : fmtUsd(l.cost)}</td>
+      \${cells(l).map((c) => \`<td>\${c}</td>\`).join('')}
     </tr>\`).join('');
   $('trace-table').innerHTML = \`
     <tr><th>Model</th><th>Input tok</th><th>Output tok</th><th>Cache read</th><th>Est. cost</th></tr>
@@ -583,9 +723,16 @@ function renderTrace(trace) {
     <tr><td>Total billed (Claude)</td><td></td><td></td><td></td><td>\${fmtUsd(trace.totalCost)}</td></tr>\`;
 
   const s = trace.savings;
-  $('savings').textContent = s.codexTokens > 0
-    ? \`Codex handled \${fmtTok(s.codexTokens)} tokens at $0 — roughly \${fmtUsd(s.low)}–\${fmtUsd(s.high)} if that work had run on Fable 5 (rate-range estimate).\`
-    : 'No Codex token data found in this trace.';
+  let msg;
+  if (s.mode === 'exact' && (s.codexIn || s.codexOut)) {
+    msg = \`Codex ran \${fmtTok(s.codexIn)} in / \${fmtTok(s.codexOut)} out tokens at $0 — ≈ \${fmtUsd(s.est)} at Fable 5 rates.\`;
+  } else if (s.mode === 'range' && s.codexTokens > 0) {
+    msg = \`Codex handled \${fmtTok(s.codexTokens)} tokens at $0 — roughly \${fmtUsd(s.low)}–\${fmtUsd(s.high)} on Fable 5 (rate-range estimate).\`;
+  } else {
+    msg = 'No Codex usage found in this trace.';
+  }
+  if (trace.localTokens > 0) msg += \` Local model processed \${fmtTok(trace.localTokens)} prompt tokens offline.\`;
+  $('savings').textContent = msg;
 
   document.querySelectorAll('.seg').forEach((el) =>
     el.addEventListener('mousemove', (e) => {

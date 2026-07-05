@@ -80,10 +80,16 @@ lines of the installed `~/.claude/agents/atlas-*.md` files. Model dropdowns are 
 `agy models` and `lms ls` where those CLIs can enumerate; curated lists elsewhere. Zero dependencies,
 localhost only.
 
-The **Traces** section mines the repo's Claude Code session transcripts for Atlas runs and shows, per
-run: a per-model activity timeline (when Fable, Codex, Claude, and the wrappers were busy), token and
-estimated-cost breakdown per model at current API rates, and how many tokens Codex handled at $0 —
-with a rate-range estimate of what that work would have cost on Fable 5.
+The **Traces** section shows, per Atlas run, a per-model activity timeline and a token/cost breakdown.
+Claude usage comes from the repo's Claude Code transcripts; the other models come from their own CLIs'
+local logs, matched to the run's time window:
+
+- **Codex** — `~/.codex/sessions/` rollouts (per-turn tokens incl. cache, attributed by repo cwd)
+- **Gemini** — `~/.gemini/antigravity-cli/history.jsonl` (per-turn activity, attributed by workspace)
+- **Local** — `~/.lmstudio/server-logs/` (per-request prompt tokens; time-window attribution only)
+
+The savings line prices Codex's actual token mix at Fable 5 rates — what that work would have cost if
+the planner had done it itself.
 
 ## Config (`.atlas/config.json`)
 
