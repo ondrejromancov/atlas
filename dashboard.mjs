@@ -546,13 +546,14 @@ const PAGE = `<!doctype html>
     display: flex; gap: 10px; align-items: center; border-top: 1px solid var(--line); }
   #status { font-size: 13px; color: var(--muted); }
   #status.err { color: var(--danger); }
-  .agent { display: flex; gap: 10px; align-items: center; }
-  .agent .name { flex: 0 0 175px; font-family: ui-monospace, monospace; font-size: 13px; }
-  .agent .brain { flex: 1.2; font-size: 13px; color: var(--muted); }
-  .agent .brain b { color: var(--ink); font-weight: 600; }
-  .agent .wlabel { flex: none; font-size: 11px; color: var(--muted); text-transform: uppercase;
+  .agent { display: grid; grid-template-columns: 175px 1fr auto 190px auto; gap: 12px;
+    align-items: center; }
+  .agent .name { font-family: ui-monospace, monospace; font-size: 13px; }
+  .agent .brain { font-size: 13px; color: var(--muted); }
+  .agent .brain b { color: var(--ink); font-weight: 600; white-space: nowrap; }
+  .agent .wlabel { font-size: 11px; color: var(--muted); text-transform: uppercase;
     letter-spacing: .05em; }
-  .agent input { flex: 0 1 170px; }
+  .agent .missing { grid-column: 2 / -1; }
   .missing { color: var(--danger); font-size: 13px; }
   .hint { text-transform: none; letter-spacing: 0; font-weight: normal; opacity: .8; }
   /* Trace viz — validated categorical slots (dataviz reference palette) */
